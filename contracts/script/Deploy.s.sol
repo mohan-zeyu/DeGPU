@@ -5,10 +5,10 @@ import {Script, console} from "forge-std/Script.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
 import {CheckedMarket} from "../src/CheckedMarket.sol";
-import {NonceChecker} from "../src/checkers/NonceChecker.sol";
+import {KeySearchChecker} from "../src/checkers/KeySearchChecker.sol";
 
 /// @notice Deploys the registry and both markets with the demo parameters, and registers the
-///         built-in task types: image-classify-v1 (replicated) and nonce-search-v1 (checked).
+///         built-in task types: image-classify-v1 (replicated) and key-search-v1 (checked).
 ///         `Chain.deploy` in degpu/chain.py does the same and also registers every other task
 ///         installed under degpu/tasks/; this script is the standalone Foundry path.
 /// Usage (anvil account 0 as owner):
@@ -26,6 +26,7 @@ contract Deploy is Script {
             checkWindow: 600,
             revealWindow: 300,
             publishWindow: 300,
+            disputeWindow: 300,
             tiebreakWindow: 600,
             tiebreakFee: 0.002 ether,
             wrongSlashBps: 3000,
@@ -50,8 +51,8 @@ contract Deploy is Script {
         checked = new CheckedMarket(address(registry), checkedParams());
         registry.addMarket(address(replicated));
         registry.addMarket(address(checked));
-        replicated.addTaskType(runnerHash, "image-classify-v1", 1);
-        checked.addTaskType(new NonceChecker(), "nonce-search-v1", 2);
+        replicated.addTaskType(runnerHash, "image-classify-v1", 1, ReplicatedMarket.Compare.Exact);
+        checked.addTaskType(new KeySearchChecker(), "key-search-v1", 2);
         vm.stopBroadcast();
 
         console.log("ProviderRegistry:", address(registry));

@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {DeGPUBase} from "./DeGPUBase.t.sol";
 import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
 import {CheckedMarket} from "../src/CheckedMarket.sol";
-import {NonceChecker} from "../src/checkers/NonceChecker.sol";
+import {KeySearchChecker} from "../src/checkers/KeySearchChecker.sol";
 
 /// @notice Several task types and several markets on one registry: offers and prices per
 ///         (market, task type), deadlines scaled by the task's secondsPerItem, stats per market.
@@ -16,7 +16,7 @@ contract TaskTypesTest is DeGPUBase {
 
     function setUp() public override {
         super.setUp();
-        market.addTaskType(keccak256("other runner"), "other-task-v1", SPI2);
+        market.addTaskType(keccak256("other runner"), "other-task-v1", SPI2, ReplicatedMarket.Compare.Exact);
         for (uint256 i = 0; i < providers.length; i++) {
             vm.prank(providers[i]);
             registry.setPrice(address(market), TASK2, PPI2);
@@ -80,7 +80,7 @@ contract TaskTypesTest is DeGPUBase {
             address(registry), CheckedMarket.Params({acceptWindow: 300, workWindow: 300, missedSlashBps: 1000})
         );
         registry.addMarket(address(checked));
-        checked.addTaskType(new NonceChecker(), "nonce-search-v1", 0);
+        checked.addTaskType(new KeySearchChecker(), "key-search-v1", 0);
         vm.prank(A);
         registry.setPrice(address(checked), 1, 1 wei);
         assertEq(registry.priceOf(A, address(checked), 1), 1 wei);
@@ -88,7 +88,7 @@ contract TaskTypesTest is DeGPUBase {
 
         // a missed checked job slashes A's shared stake and locks it meanwhile
         bytes[] memory items = new bytes[](1);
-        items[0] = abi.encode(bytes32(uint256(1)), type(uint256).max);
+        items[0] = abi.encode(keccak256(abi.encode(uint256(5))), uint256(0), uint256(10));
         vm.prank(client);
         uint256 cid = checked.createJob{value: 1 wei}(A, 1, items);
         vm.prank(A);

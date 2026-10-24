@@ -7,7 +7,7 @@ import {IChecker} from "./IChecker.sol";
 /// @title CheckedMarket
 /// @notice The "checked" verification mode: every answer is verified on-chain by the task type's
 ///         checker contract, so no other provider has to re-run anything. Fits puzzles that are
-///         hard to solve and cheap to check (mining-style nonce search, key search...).
+///         hard to solve and cheap to check (key search, factoring...).
 ///         A client posts N items to a main provider M and deposits N x price. M accepts, solves
 ///         what it can and submits one answer per item, marking the items it could not solve.
 ///         The contract checks every answer it is given: a single wrong answer reverts the whole

@@ -5,14 +5,14 @@ import {Test} from "forge-std/Test.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {CheckedMarket} from "../src/CheckedMarket.sol";
 import {IChecker} from "../src/IChecker.sol";
-import {NonceChecker} from "../src/checkers/NonceChecker.sol";
+import {KeySearchChecker} from "../src/checkers/KeySearchChecker.sol";
 
-/// @notice The checked mode: answers verified on-chain by the task's checker (here NonceChecker),
+/// @notice The checked mode: answers verified on-chain by the task's checker (here KeySearchChecker),
 ///         pay per solved item, wrong answers rejected, missed deadlines slashed.
 contract CheckedMarketTest is Test {
     ProviderRegistry internal registry;
     CheckedMarket internal market;
-    NonceChecker internal checker;
+    KeySearchChecker internal checker;
 
     address internal client;
     address internal stranger;
@@ -25,8 +25,7 @@ contract CheckedMarketTest is Test {
     uint256 internal constant TASK = 1;
     uint64 internal constant SECONDS_PER_ITEM = 2;
     uint256 internal constant N = 10;
-    bytes32 internal constant CHALLENGE = 0x1111111111111111111111111111111111111111111111111111111111111111;
-    uint256 internal constant EASY_TARGET = 2 ** 248; // ~1 in 256 nonces qualifies
+    uint256 internal constant RANGE = 1000; // item i hides its key in [i * RANGE, (i + 1) * RANGE)
 
     function setUp() public {
         vm.warp(1_700_000_000);
@@ -35,8 +34,8 @@ contract CheckedMarketTest is Test {
             address(registry), CheckedMarket.Params({acceptWindow: 300, workWindow: 300, missedSlashBps: 1000})
         );
         registry.addMarket(address(market));
-        checker = new NonceChecker();
-        market.addTaskType(checker, "nonce-search-v1", SECONDS_PER_ITEM);
+        checker = new KeySearchChecker();
+        market.addTaskType(checker, "key-search-v1", SECONDS_PER_ITEM);
 
         client = makeAddr("client");
         stranger = makeAddr("stranger");
@@ -58,29 +57,33 @@ contract CheckedMarketTest is Test {
     // Helpers
     // ------------------------------------------------------------------
 
-    function _item(uint256 i, uint256 target) internal pure returns (bytes memory) {
-        return abi.encode(keccak256(abi.encode(CHALLENGE, i)), target);
+    /// The key hidden in item i.
+    function _key(uint256 i) internal pure returns (uint256) {
+        return i * RANGE + 7;
     }
 
-    function _items(uint256 n, uint256 target) internal pure returns (bytes[] memory items) {
+    /// key-search-v1 item i: the hash of _key(i) and the range [i * RANGE, (i + 1) * RANGE).
+    function _item(uint256 i) internal pure returns (bytes memory) {
+        return abi.encode(keccak256(abi.encode(_key(i))), i * RANGE, (i + 1) * RANGE);
+    }
+
+    /// An item with no solution: its key lies just below its range.
+    function _impossible(uint256 i) internal pure returns (bytes memory) {
+        return abi.encode(keccak256(abi.encode(_key(i))), _key(i) + 1, (i + 1) * RANGE);
+    }
+
+    function _items(uint256 n) internal pure returns (bytes[] memory items) {
         items = new bytes[](n);
         for (uint256 i = 0; i < n; i++) {
-            items[i] = _item(i, target);
+            items[i] = _item(i);
         }
     }
 
-    /// Smallest nonce solving `item` (brute force; fine for easy targets).
-    function _solve(bytes memory item) internal pure returns (bytes32) {
-        (bytes32 c, uint256 target) = abi.decode(item, (bytes32, uint256));
-        for (uint256 nonce = 0;; nonce++) {
-            if (uint256(keccak256(abi.encode(c, bytes32(nonce)))) < target) return bytes32(nonce);
-        }
-    }
-
-    function _answers(bytes[] memory items, bool[] memory found) internal pure returns (bytes32[] memory a) {
-        a = new bytes32[](items.length);
-        for (uint256 i = 0; i < items.length; i++) {
-            if (found[i]) a[i] = _solve(items[i]);
+    /// The right key for every found item (items built with _item, in order).
+    function _answers(bool[] memory found) internal pure returns (bytes32[] memory a) {
+        a = new bytes32[](found.length);
+        for (uint256 i = 0; i < found.length; i++) {
+            if (found[i]) a[i] = bytes32(_key(i));
         }
     }
 
@@ -114,28 +117,11 @@ contract CheckedMarketTest is Test {
     }
 
     // ------------------------------------------------------------------
-    // The checker
-    // ------------------------------------------------------------------
-
-    /// Golden vectors shared with tests/test_tasks.py (INTERFACE.md section 8).
-    function test_NonceChecker_Golden() public view {
-        assertEq(
-            keccak256(abi.encode(CHALLENGE, bytes32(uint256(7)))),
-            0xea2cda56caceff556aeeb2756e2c1a820445b6413765d79997510293af0f2e35
-        );
-        bytes memory item = abi.encode(CHALLENGE, EASY_TARGET);
-        assertEq(_solve(item), bytes32(uint256(218))); // the first nonce under 2^248
-        assertTrue(checker.check(item, bytes32(uint256(218))));
-        assertFalse(checker.check(item, bytes32(uint256(217))));
-        assertFalse(checker.check(abi.encode(CHALLENGE, uint256(0)), bytes32(uint256(218)))); // target 0: impossible
-    }
-
-    // ------------------------------------------------------------------
     // Outcomes
     // ------------------------------------------------------------------
 
     function test_Delivered_AllSolved() public {
-        bytes[] memory items = _items(N, EASY_TARGET);
+        bytes[] memory items = _items(N);
         uint256 c0 = client.balance;
         uint256 a0 = A.balance;
         uint256 id = _create(items);
@@ -144,7 +130,7 @@ contract CheckedMarketTest is Test {
         assertEq(_locks(A), 1);
         bool[] memory found = _allFound(N);
         vm.prank(A);
-        market.submitResults(id, items, _answers(items, found), found);
+        market.submitResults(id, items, _answers(found), found);
 
         CheckedMarket.Job memory j = market.getJob(id);
         assertEq(uint8(j.status), uint8(CheckedMarket.Status.Closed));
@@ -161,9 +147,9 @@ contract CheckedMarketTest is Test {
 
     /// Unsolved items are refunded; "not found" is never slashed.
     function test_Delivered_PartlySolved() public {
-        bytes[] memory items = _items(N, EASY_TARGET);
-        items[3] = _item(3, 0); // impossible
-        items[7] = _item(7, 0); // impossible
+        bytes[] memory items = _items(N);
+        items[3] = _impossible(3);
+        items[7] = _impossible(7);
         uint256 c0 = client.balance;
         uint256 a0 = A.balance;
         uint256 id = _create(items);
@@ -172,7 +158,7 @@ contract CheckedMarketTest is Test {
         found[3] = false;
         found[7] = false;
         vm.prank(A);
-        market.submitResults(id, items, _answers(items, found), found);
+        market.submitResults(id, items, _answers(found), found);
 
         assertEq(market.getJob(id).solved, N - 2);
         assertEq(A.balance - a0, (N - 2) * PPI);
@@ -184,29 +170,31 @@ contract CheckedMarketTest is Test {
 
     /// A single wrong answer rejects the whole submission; nothing is paid or recorded.
     function test_InvalidAnswerReverts() public {
-        bytes[] memory items = _items(N, EASY_TARGET);
+        bytes[] memory items = _items(N);
         uint256 id = _create(items);
         _accept(id);
         bool[] memory found = _allFound(N);
-        bytes32[] memory answers = _answers(items, found);
-        answers[4] = bytes32(uint256(answers[4]) + 1); // the next nonce almost never qualifies
+        bytes32[] memory answers = _answers(found);
+        answers[4] = bytes32(uint256(answers[4]) + 1); // a key in the range, but not the hidden one
         require(!checker.check(items[4], answers[4]), "test needs a wrong answer");
         vm.prank(A);
         vm.expectRevert(bytes("invalid answer"));
         market.submitResults(id, items, answers, found);
         assertEq(uint8(market.getJob(id).status), uint8(CheckedMarket.Status.Working));
-        // claiming an impossible item as found is rejected too
-        bytes[] memory items2 = _items(1, 0);
+        // claiming an impossible item as found is rejected too, even with the key that hashes right
+        bytes[] memory items2 = new bytes[](1);
+        items2[0] = _impossible(0);
         uint256 id2 = _create(items2);
         _accept(id2);
         bytes32[] memory a2 = new bytes32[](1);
+        a2[0] = bytes32(_key(0));
         vm.prank(A);
         vm.expectRevert(bytes("invalid answer"));
         market.submitResults(id2, items2, a2, _allFound(1));
     }
 
     function test_MainMissed_SlashedClientRefunded() public {
-        bytes[] memory items = _items(N, EASY_TARGET);
+        bytes[] memory items = _items(N);
         uint256 c0 = client.balance;
         uint256 id = _create(items);
         _accept(id);
@@ -225,7 +213,7 @@ contract CheckedMarketTest is Test {
     }
 
     function test_Cancelled_ByClientOrAfterAcceptDeadline() public {
-        bytes[] memory items = _items(N, EASY_TARGET);
+        bytes[] memory items = _items(N);
         uint256 c0 = client.balance;
         uint256 id = _create(items);
         vm.prank(stranger);
@@ -248,7 +236,7 @@ contract CheckedMarketTest is Test {
 
     /// The price is pinned at createJob.
     function test_PricePinnedAtCreate() public {
-        bytes[] memory items = _items(N, EASY_TARGET);
+        bytes[] memory items = _items(N);
         uint256 a0 = A.balance;
         uint256 id = _create(items);
         vm.prank(A);
@@ -256,7 +244,7 @@ contract CheckedMarketTest is Test {
         _accept(id);
         bool[] memory found = _allFound(N);
         vm.prank(A);
-        market.submitResults(id, items, _answers(items, found), found);
+        market.submitResults(id, items, _answers(found), found);
         assertEq(A.balance - a0, N * PPI);
     }
 
@@ -265,7 +253,7 @@ contract CheckedMarketTest is Test {
     // ------------------------------------------------------------------
 
     function test_CreateJob_Reverts() public {
-        bytes[] memory items = _items(N, EASY_TARGET);
+        bytes[] memory items = _items(N);
         vm.startPrank(client);
         vm.expectRevert(bytes("unknown task type"));
         market.createJob{value: N * PPI}(A, 2, items);
@@ -287,10 +275,10 @@ contract CheckedMarketTest is Test {
     }
 
     function test_Submit_Reverts() public {
-        bytes[] memory items = _items(N, EASY_TARGET);
+        bytes[] memory items = _items(N);
         uint256 id = _create(items);
         bool[] memory found = _allFound(N);
-        bytes32[] memory answers = _answers(items, found);
+        bytes32[] memory answers = _answers(found);
         vm.prank(A);
         vm.expectRevert(bytes("wrong status"));
         market.submitResults(id, items, answers, found); // not accepted yet
@@ -305,8 +293,8 @@ contract CheckedMarketTest is Test {
         vm.startPrank(A);
         vm.expectRevert(bytes("bad length"));
         market.submitResults(id, items, answers, new bool[](N - 1));
-        bytes[] memory other = _items(N, EASY_TARGET);
-        other[0] = _item(99, EASY_TARGET);
+        bytes[] memory other = _items(N);
+        other[0] = _item(99);
         vm.expectRevert(bytes("items mismatch"));
         market.submitResults(id, other, answers, found);
         vm.warp(block.timestamp + 300 + N * SECONDS_PER_ITEM + 1);
@@ -321,11 +309,11 @@ contract CheckedMarketTest is Test {
         market.addTaskType(checker, "x", 0);
         vm.expectRevert(bytes("zero checker"));
         market.addTaskType(IChecker(address(0)), "x", 0);
-        uint256 id = market.addTaskType(checker, "nonce-search-v2", 7);
+        uint256 id = market.addTaskType(checker, "key-search-v2", 7);
         assertEq(id, 2);
         (address c, string memory name, uint64 spi) = market.taskTypeOf(2);
         assertEq(c, address(checker));
-        assertEq(name, "nonce-search-v2");
+        assertEq(name, "key-search-v2");
         assertEq(spi, 7);
     }
 

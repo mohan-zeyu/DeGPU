@@ -11,9 +11,11 @@ This document explains how the code fits together: which parts exist, what each 
 
 DeGPU separates **what** a provider computes from **how** the platform knows the answer is right:
 
-- **A job type (task)** is a plugin folder under `degpu/tasks/`, for example `image-classify-v1` or `nonce-search-v1`.
+- **A job type (task)** is a plugin folder under `degpu/tasks/`, for example `image-classify-v1`, `blender-render-v1` or `key-search-v1`.
 - **A verification mode** is one market contract plus an off-chain driver:
-  - **replicated** (`ReplicatedMarket`): random verifiers re-run the work and the contract compares hashes;
+  - **replicated** (`ReplicatedMarket`): random verifiers re-run the work. The task picks how results are compared:
+    - **exact:** the contract compares result hashes (`image-classify-v1`);
+    - **similar:** the client compares result files with the task's pinned metric and disputes the ones that differ, then a tie-breaker judges (`blender-render-v1`).
   - **checked** (`CheckedMarket`): a checker contract verifies each answer on-chain.
 
 The code has five layers:
@@ -31,7 +33,7 @@ The code has five layers:
  │  ProviderRegistry ◀── lock · slash · bump ── MarketBase                          │
  │  stake, key, locks,  ── slashed ETH ──────▶   ├─ ReplicatedMarket  (re-run)      │
  │  price per (market,                           └─ CheckedMarket ──▶ IChecker      │
- │  task), stats per market                         (check on-chain)   NonceChecker │
+ │  task), stats per market                         (check on-chain)   KeySearch    │
  └───────────────▲───────────────────────────────────────────────▲──────────────────┘
                  │   transactions · getJob reads · event logs    │
        ┌─────────┴──────────┐                       ┌────────────┴────────────┐
@@ -44,7 +46,7 @@ The code has five layers:
        └─────────┬───────────────────────────────────────────────┬────────────┘
                  │ task hooks: prepare, run / solve, present...  │
        ┌─────────┴───────────────────────────────────────────────┴────────────┐
-       │ degpu/tasks/   image_classify_v1/ · nonce_search_v1/   (base.py)      │
+       │ degpu/tasks/   image_classify_v1/ · key_search_v1/   (base.py)        │
        └──────────────────────────────────────────────────────────────────────┘
           shared: crypto.py · chain.py · storage.py (encrypted blobs; replicated mode only)
 ```
@@ -99,7 +101,7 @@ Python and Solidity share no code. Three things tie them together:
   - `_slash` and `_pay`, with the `Payout` and `ProviderSlashed` events;
   - `receive()`, which accepts ETH only from the registry.
 - **Each concrete market** adds its own per-task data and its own job state machine:
-  - **ReplicatedMarket:** a runner hash per task, the hidden verify decision, verifier and tie-breaker draws, item-by-item comparison and settlement.
+  - **ReplicatedMarket:** a runner hash and a `Compare` kind per task, the hidden verify decision, verifier and tie-breaker draws, the comparison (on-chain for exact tasks, by the client's dispute for similar ones), and settlement.
   - **CheckedMarket:** a checker contract per task, plus a short Open → Working → Closed flow.
 
 How the contracts interact:
@@ -176,6 +178,27 @@ market at close ── payouts ─────────▶ replicated: main �
 
 If no verifier committed (every slot was dropped), Checking goes straight to Publishing. The compute, check and tie-break deadlines each add the task's `secondsPerItem` × the number of items that phase must run.
 
+**ReplicatedMarket, similar tasks.** Everything up to Publishing is the same. Only the comparison is replaced:
+
+```
+           Publishing ── expire ───────────────────────────────────────▶ Closed: MainMissed
+                │ publishResults (M): leaves + the URI of its result files
+                ▼
+           Disputing ── acceptResults (client) · expire ───────────────▶ Closed: Verified (Delivered if unchecked)
+                │ dispute (client, with a bond): the items whose files differ or are missing
+                ▼ draw T  (none left → Closed: NoMajority)
+            TieBreak ── expire ────────────────────────────────────────▶ Closed: TiebreakerMissed / TieClientNoShare
+                │ shareTiebreak (client), then submitJudgement (T): one verdict per item
+                ▼
+            Closed: MainOutvoted · VerifierOutvoted · BothOutvoted · NoMajority · DisputeRejected
+```
+
+Both comparisons meet in the same two internal functions:
+- **`_startTiebreak`** draws T for the `mismatched` items. For exact tasks those items come from the contract's own comparison; for similar tasks, from the client's `dispute`.
+- **`_verdict(i, mainOk, verifierOk)`** applies the majority rule. `submitTiebreak` (exact) derives the two flags from leaf equality, and `submitJudgement` (similar) takes them from T.
+
+The settlement in `_close` is shared and unchanged; the dispute bond is simply part of the pool.
+
 **CheckedMarket:**
 
 ```
@@ -204,8 +227,10 @@ Per-job data of the replicated market, where it is written and where it is read:
 | `resultsCommit` | `commitResults` | `publishResults` |
 | `verifiers`, `vstate`, `vcommit` | `revealDecision` (the draw), then every step of Checking and CheckReveal | `revealCheck`, `_advanceChecking`, `_close`; off-chain by the client and the agents |
 | `checkLeaf[job][i]` | `revealCheck` | `publishResults`, `submitTiebreak` |
-| `mismatched`, `mainMismatchLeaves` | `publishResults` | `submitTiebreak`; off-chain by the client (what to share) and T (what to run) |
-| `outvotedMask`, `unresolvedMask`, `mainOutvoted` | `submitTiebreak`, `expire`, and `publishResults` when no T can be drawn | `_close` |
+| `mismatched` | `publishResults` (exact) or `dispute` (similar) | `submitTiebreak` / `submitJudgement`; off-chain by the client (what to share) and T (what to run) |
+| `mainMismatchLeaves` | `publishResults` (exact) | `submitTiebreak` |
+| `disputeBond` | `dispute` | `_close` (part of the pool) |
+| `outvotedMask`, `unresolvedMask`, `mainOutvoted` | `_verdict` (from either submission), `expire`, and `_startTiebreak` when no T can be drawn | `_close` |
 
 ### 3.4 The order in which parties are bound (replicated mode)
 
@@ -281,9 +306,12 @@ Events only answer "am I involved, and what do I need?" The question "what phase
 | Deciding | `revealDecision` | wait | | |
 | Checking | `shareRange` for each slot still Assigned | wait | unseal, check its range and inputs, `task.run` on its range, `commitCheck` (or `reportBadInput`) | |
 | CheckReveal | — | wait | `revealCheck` | |
-| Publishing | — | `publishResults` | | |
-| TieBreak | `shareTiebreak` | — | — | unseal, check inputs, `task.run` on the mismatched items, `submitTiebreak` (or `reportBadInput`) |
-| Closed | record the outcome; `results()` decodes leaves with `task.candidates()` | | | |
+| Publishing | — | `publishResults` (similar: plus its results URI) | | |
+| Disputing (similar only) | load M's and each verifier's files, compare them with `task.similar`; `dispute` the differing or missing items (with a bond), else `acceptResults` | — | — | |
+| TieBreak | `shareTiebreak` (similar: plus both sides' result keys) | — | — | unseal, check inputs, `task.run` on the mismatched items; exact: `submitTiebreak`; similar: compare with both sides' files and `submitJudgement` |
+| Closed | record the outcome; `results()` decodes leaves with `task.candidates()` (exact) or returns M's verified files (similar) | | | |
+
+For a similar task, M and each verifier also upload their outputs, encrypted, when they compute them.
 
 **Checked mode:**
 
@@ -301,8 +329,8 @@ The `behavior` flag changes only the agent, never the contract:
 
 | Behaviour | Replicated mode | Checked mode |
 |---|---|---|
-| `cheat` | M replaces 20% of its words with `task.wrong_output` | M submits `task.wrong_answer` for every item; the checker reverts it |
-| `liar` | a verifier submits `task.random_output` | — |
+| `cheat` | M replaces 20% of its outputs with `task.wrong_output` (similar tasks: a degraded file) | M submits `task.wrong_answer` for every item; the checker reverts it |
+| `liar` | a verifier submits `task.random_output` (similar tasks: garbage files) | — |
 | `offline` | M accepts, then stops; never acts as verifier or T | M accepts, then stops |
 
 ## 5. The data path (replicated mode): keys, store and input checks
@@ -337,6 +365,15 @@ All three roles run the same input check before computing:
 
 If any check fails, M refuses the job, and a verifier or T calls `reportBadInput`.
 
+**Similar tasks** also move results through the store:
+
+| File | Encrypted with | Announced by | Read by |
+|---|---|---|---|
+| M's output for item i | `result_key(i)` (M derives it from `k_job`) | `publishResults(.., resultsURI)` | the client (review, results) and T (the disputed items) |
+| verifier slot j's output for item i | `check_result_key(j, i)` (sent in its range payload) | `revealCheck(.., resultsURI)` | the client (review) and T |
+
+`pack_results` and `load_results` in `degpu/modes/replicated.py` are the only code that knows this layout. A file counts only if its hash matches the leaf already committed on-chain, so nobody can swap a file after committing.
+
 The checked mode has no data path: its items are public and travel in the `JobCreated` event.
 
 ## 6. The results path
@@ -359,6 +396,20 @@ Three properties make this work:
 - **Honest providers produce identical leaves.** The task's `run` must be deterministic, and its folder is pinned on-chain.
 - **Outsiders learn nothing from leaves:** without `job_salt` they can't try the candidates.
 - **Leaves can't be moved between items,** because the item index is inside the hash.
+
+**Replicated mode, similar tasks:** files → hashes in leaves → the client's comparison → files.
+
+```
+task.run(state, items)            → one output file per item (render task: a PNG frame)
+crypto.leaf(job_salt, i, keccak(file)) → leaf_i; the file itself goes to the store, encrypted
+
+M and V commit and reveal their leaves exactly as above; nobody compares leaves on-chain.
+client: load both sides' files (each checked against its leaf), task.similar(m, v) per item
+        → dispute the differing items, or acceptResults
+T:      task.run on the disputed items, task.similar(ours, m) and task.similar(ours, v)
+        → submitJudgement(verdicts)
+client: results() → M's files, each checked against its leaf → task.present(file)
+```
 
 **Checked mode:** answers → checker → answers.
 
@@ -386,7 +437,7 @@ client: ResultsSubmitted(answers, found) → task.present(item, answer)
 | 10 | T | `task.run` on the mismatched items, `submitTiebreak`; the market settles | `TiebreakSubmitted`, `ProviderSlashed`, `Payout`, `JobClosed` | the client records the outcome |
 | 11 | client `results()` | decode the leaves | — | — |
 
-**A checked (mining) job:**
+**A checked (key-search) job:**
 
 | # | Actor (code) | Action | Emits | Picked up by |
 |---|---|---|---|---|
@@ -411,11 +462,11 @@ client: ResultsSubmitted(answers, found) → task.present(item, answer)
 
 | Layer | Tests | Approach |
 |---|---|---|
-| Contracts | `contracts/test/*.t.sol` | `DeGPUBase` deploys the replicated market with the demo params and six providers; tests feed synthetic leaves and steer draws with `vm.prevrandao`. The suites are: Settlement, Reverts, Draw (including offer filtering), Encoding, Gas, Deploy, `TaskTypes` (per-task prices and deadlines, two markets on one registry) and `CheckedMarket` (its own fixture with `NonceChecker`). |
-| Python libraries | `test_crypto.py`, `test_storage.py`, `test_runner.py`, `test_decode.py`, `test_nonce_search.py`, `test_key_search.py` | Golden vectors shared with the Solidity tests, runner determinism, leaf decoding, and the replicated manifest helpers. |
-| Every task | `tests/test_tasks.py` | Conformance tests run once per installed task, so a new task is tested automatically: determinism and batch independence, word format and decoding, runner-hash coverage; for checked tasks, solve/check consistency and agreement with the deployed checker. |
-| Integration | `tests/test_e2e.py` | A real anvil, both modes: replicated jobs on 20 images, plus mining jobs (honest, and cheating then slashed). |
-| Acceptance | `scripts/demo.py` | Seven scenarios with exact balance assertions; it exits with code 1 on any failure. |
+| Contracts | `contracts/test/*.t.sol` | `DeGPUBase` deploys the replicated market with the demo params and six providers; tests feed synthetic leaves and steer draws with `vm.prevrandao`. The suites are: Settlement, Reverts, Draw (including offer filtering), Encoding, Gas, Deploy, `TaskTypes` (per-task prices and deadlines, two markets on one registry), `Similarity` (disputes, judgements, the bond, every similar outcome) and `CheckedMarket` (its own fixture with `KeySearchChecker`). |
+| Python libraries | `test_crypto.py`, `test_storage.py`, `test_runner.py`, `test_decode.py`, `test_key_search.py`, `test_similarity.py` | Golden vectors shared with the Solidity tests, runner determinism, leaf decoding, the replicated manifest helpers, and the render similarity rule on synthetic images. |
+| Every task | `tests/test_tasks.py` | Conformance tests run once per installed task, so a new task is tested automatically. Exact tasks: determinism and batch independence, word format and decoding. Similar tasks: a sane `similar`. Both: runner-hash coverage. Checked tasks: solve/check consistency and agreement with the deployed checker. |
+| Integration | `tests/test_e2e.py` | A real anvil, all comparisons. Exact: image jobs on 20 images. Similar: the test-only fake render task (`tests/fake_render/`, injected by `conftest.py`) runs an honest job, a cheat, lying verifiers, missing files and an unfounded dispute; a real Blender job runs too if Blender is installed. Checked: key-search jobs. |
+| Acceptance | `scripts/demo.py` | Nine scenarios with exact balance assertions (the two render scenarios skip without Blender); it exits with code 1 on any failure. |
 
 ## 10. Things that must stay in sync
 
@@ -423,7 +474,8 @@ client: ResultsSubmitted(answers, found) → task.present(item, answer)
 |---|---|---|
 | Hash and commitment encodings | `crypto.py` and `ReplicatedMarket.sol` | golden vectors in INTERFACE.md §2, `Encoding.t.sol` and `test_crypto.py` |
 | A checked task's rule | its Python `check` and its checker contract | `test_tasks.py` (Python vs deployed contract) and the task's golden vector |
-| Enums (`Status`, `Outcome`, `Drop`, `VState`, `Stat`, `Checked*`) | the contracts, and the `IntEnum`s in `chain.py`, matched by position | the e2e tests and the demo |
+| A similar task's rule | its `similar` (in the task folder, so in the runner hash) | the runner hash: every provider and the client run the same code |
+| Enums (`Status`, `Outcome`, `Drop`, `VState`, `Stat`, `Compare`, `Checked*`) | the contracts, and the `IntEnum`s in `chain.py`, matched by position | the e2e tests and the demo |
 | `Params` field order and demo values, and the min stake | the contracts' `Params`; `DEMO_PARAMS` / `CHECKED_PARAMS` / `MIN_STAKE` in `chain.py`; `Deploy.s.sol`; `DeGPUBase.t.sol` | nothing automatic: change them together |
 | Built-in task registration | `Chain.deploy` (from the task registry) and `Deploy.s.sol` (by hand) | `Deploy.t.sol` covers only the forge script |
 | Sealed payload fields | written by `ReplicatedClient`, read by `ReplicatedProvider` | INTERFACE.md §3 and the e2e tests |
@@ -445,7 +497,7 @@ client: ResultsSubmitted(answers, found) → task.present(item, answer)
   - sign transactions in `Chain.send`;
   - replace the randomness in `_draw` with VRF;
   - run a keeper that calls `expire`.
-- **Large replicated outputs:** encrypted result files, or a Merkle root with per-item proofs, instead of enumerable 32-byte words.
+- **Large replicated outputs:** a `SimilarTask` already returns files through the store. A strict task with large outputs could reuse the same file path with an exact `similar` (byte equality).
 
 ## 12. The `video/` folder
 

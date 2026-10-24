@@ -119,22 +119,26 @@ class ProviderAgent:
             task_id = self.chain.task_id(name)
             if task_id is None or task.mode not in self.chain.markets:
                 continue  # not deployed on this chain
-            price = (prices or {}).get(name, task.default_price)
+            price = (prices or {}).get(name, task.default_price) if task.available() else 0
+            if not price:
+                self.log(f"not offering {name}: it can't run on this machine")
             if self.chain.price_of(self.account, task.mode, task_id) != price:
                 market = self.chain.markets[task.mode].address
                 self.chain.send(reg.setPrice(market, task_id, price), self.account)
-            offered.append(f"{name} at {price / 1e18:g} ETH/item")
+            if price:
+                offered.append(f"{name} at {price / 1e18:g} ETH/item")
         if offered:
             self.log("offers " + ", ".join(offered))
         self._save_state()
 
     def task_for(self, mode: str, task_id: int) -> Task | None:
-        """The local task behind task type ``task_id`` of the ``mode`` market, if this agent offers it."""
+        """The local task behind task type ``task_id`` of the ``mode`` market, if this agent offers
+        it and can run it here."""
         key = (mode, int(task_id))
         if key not in self._task_names:
             self._task_names[key] = self.chain.task_type(mode, task_id)[1]
         task = self.tasks.get(self._task_names[key])
-        return task if task is not None and task.mode == mode else None
+        return task if task is not None and task.mode == mode and task.available() else None
 
     # ------------------------------------------------------------------
     # Main loop

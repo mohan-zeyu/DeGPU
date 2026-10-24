@@ -14,6 +14,14 @@ import {MarketBase} from "./MarketBase.sol";
 ///         mismatch a random tie-breaker T re-runs only the mismatched items and the majority
 ///         decides who gets slashed.
 ///         Verifiers and tie-breakers are drawn only among providers that offer the job's task type.
+///         How results are compared is a property of the task type:
+///         - Compare.Exact: results are 32-byte words and the contract compares M's and each
+///           verifier's leaves itself; mismatches go to the tie-breaker, who submits leaves.
+///         - Compare.Similar: results are files (in the off-chain store, pinned by their hash in
+///           the leaf) that honest providers produce only approximately alike, e.g. renders. The
+///           client compares them off-chain with the task's metric and disputes the items that
+///           differ; the tie-breaker re-runs those and submits a verdict per item.
+///         Both feed the same verdict rule and settlement.
 /// @dev See docs/INTERFACE.md section 7 for every rule implemented here.
 ///      Randomness (prevrandao + previous blockhash) is demo-grade; VRF would be the upgrade.
 contract ReplicatedMarket is MarketBase {
@@ -26,6 +34,7 @@ contract ReplicatedMarket is MarketBase {
         uint64 checkWindow; // verifiers must commit within this (+ time for their range) after being drawn
         uint64 revealWindow; // verifiers must reveal within this
         uint64 publishWindow; // M must publish within this
+        uint64 disputeWindow; // Compare.Similar: the client may dispute (or accept) within this
         uint64 tiebreakWindow; // T must submit within this (+ time for the mismatched items)
         uint256 tiebreakFee; // max pay for the tie-breaker
         uint16 wrongSlashBps; // outvoted M or verifier
@@ -43,6 +52,7 @@ contract ReplicatedMarket is MarketBase {
         Checking,
         CheckReveal,
         Publishing,
+        Disputing, // Compare.Similar only: the client reviews the results
         TieBreak,
         Closed
     }
@@ -58,7 +68,14 @@ contract ReplicatedMarket is MarketBase {
         NoMajority,
         MainMissed,
         TiebreakerMissed,
-        TieClientNoShare
+        TieClientNoShare,
+        DisputeRejected // T found every disputed item acceptable: nobody outvoted
+    }
+
+    /// How a task type's results are compared (see the contract notice).
+    enum Compare {
+        Exact,
+        Similar
     }
 
     /// Why a job ended up unverified even though it could have been checked.
@@ -114,13 +131,14 @@ contract ReplicatedMarket is MarketBase {
         bytes32 resultsCommit;
         uint64 deadline; // deadline of the current phase
         uint256 slashedPool; // stake slashed for this job and held here until close
+        uint256 disputeBond; // Compare.Similar: what the client paid to dispute (= tiebreakFee)
         uint256 outvotedMask; // bit per verifier slot: outvoted by T
         uint256 unresolvedMask; // bit per verifier slot: owns a mismatched item with no majority
         address[] verifiers;
         VState[] vstate;
         bytes32[] vcommit;
-        uint256[] mismatched; // item indices where M and the owning verifier disagree
-        bytes32[] mainMismatchLeaves; // M's leaves on `mismatched`
+        uint256[] mismatched; // item indices sent to the tie-breaker (exact: found by the contract; similar: disputed)
+        bytes32[] mainMismatchLeaves; // Compare.Exact: M's leaves on `mismatched`
     }
 
     Params internal _params;
@@ -129,6 +147,7 @@ contract ReplicatedMarket is MarketBase {
     uint256 public drawNonce; // mixed into every random draw
 
     mapping(uint256 => bytes32) internal runnerHashes; // task type => keccak of the official runner code
+    mapping(uint256 => Compare) internal compares; // task type => how its results are compared
     mapping(uint256 => Job) internal jobs;
     mapping(uint256 => mapping(uint256 => bytes32)) internal checkLeaf; // jobId => item => verifier's leaf
 
@@ -151,11 +170,13 @@ contract ReplicatedMarket is MarketBase {
     event RangeShared(uint256 indexed jobId, uint256 slot, address indexed verifier, bytes sealedForVerifier);
     event CheckCommitted(uint256 indexed jobId, uint256 slot);
     event VerifierDropped(uint256 indexed jobId, uint256 slot, VState reason);
-    event CheckRevealed(uint256 indexed jobId, uint256 slot, bytes32[] leaves);
-    event ResultsPublished(uint256 indexed jobId, bytes32[] leaves);
+    event CheckRevealed(uint256 indexed jobId, uint256 slot, bytes32[] leaves, string resultsURI);
+    event ResultsPublished(uint256 indexed jobId, bytes32[] leaves, string resultsURI);
+    event ResultsDisputed(uint256 indexed jobId, uint256[] items);
     event TiebreakStarted(uint256 indexed jobId, address indexed tiebreaker, uint256[] mismatched);
     event TiebreakShared(uint256 indexed jobId, address indexed tiebreaker, bytes sealedForTiebreaker);
     event TiebreakSubmitted(uint256 indexed jobId, bytes32[] leaves);
+    event JudgementSubmitted(uint256 indexed jobId, uint8[] verdicts);
     event JobClosed(uint256 indexed jobId, Outcome outcome);
 
     constructor(address registry_, Params memory p) MarketBase(registry_) {
@@ -171,22 +192,24 @@ contract ReplicatedMarket is MarketBase {
         return "replicated";
     }
 
-    /// @notice Owner only: add a task type whose official runner code hashes to `runnerHash`.
-    function addTaskType(bytes32 runnerHash, string calldata name, uint64 secondsPerItem)
+    /// @notice Owner only: add a task type whose official runner code hashes to `runnerHash` and
+    ///         whose results are compared as `compare`.
+    function addTaskType(bytes32 runnerHash, string calldata name, uint64 secondsPerItem, Compare compare)
         external
         returns (uint256 id)
     {
         id = _addTaskType(name, secondsPerItem);
         runnerHashes[id] = runnerHash;
+        compares[id] = compare;
     }
 
     function taskTypeOf(uint256 id)
         external
         view
-        returns (bytes32 runnerHash, string memory name, uint64 secondsPerItem)
+        returns (bytes32 runnerHash, string memory name, uint64 secondsPerItem, Compare compare)
     {
         TaskInfo storage t = taskInfo[id];
-        return (runnerHashes[id], t.name, t.secondsPerItem);
+        return (runnerHashes[id], t.name, t.secondsPerItem, compares[id]);
     }
 
     function getJob(uint256 jobId) external view returns (Job memory) {
@@ -350,8 +373,11 @@ contract ReplicatedMarket is MarketBase {
         }
     }
 
-    /// @notice A verifier opens its commitment; its leaves are stored for the comparison.
-    function revealCheck(uint256 jobId, bytes32[] calldata leaves, bytes32 vSalt) external {
+    /// @notice A verifier opens its commitment; its leaves are stored for the comparison. For a
+    ///         Compare.Similar task, `resultsURI` points at its uploaded result files ("" otherwise).
+    function revealCheck(uint256 jobId, bytes32[] calldata leaves, bytes32 vSalt, string calldata resultsURI)
+        external
+    {
         Job storage j = _job(jobId, Status.CheckReveal);
         uint256 slot = _slotOf(j, msg.sender);
         _beforeDeadline(j);
@@ -365,22 +391,29 @@ contract ReplicatedMarket is MarketBase {
             cl[s + x] = leaves[x];
         }
         j.vstate[slot] = VState.Revealed;
-        emit CheckRevealed(jobId, slot, leaves);
+        emit CheckRevealed(jobId, slot, leaves, resultsURI);
         if (!_anyState(j, VState.Committed)) _setPhase(j, Status.Publishing, _params.publishWindow);
     }
 
     // ------------------------------------------------------------------
-    // Publishing
+    // Publishing → (Disputing) → TieBreak
     // ------------------------------------------------------------------
 
-    /// @notice M publishes all N leaves; they are compared item by item with every revealed range.
-    function publishResults(uint256 jobId, bytes32[] calldata leaves) external {
+    /// @notice M publishes all N leaves. Compare.Exact: they are compared item by item with every
+    ///         revealed range. Compare.Similar: the client gets `disputeWindow` to review the result
+    ///         files at `resultsURI` and to dispute or accept them.
+    function publishResults(uint256 jobId, bytes32[] calldata leaves, string calldata resultsURI) external {
         Job storage j = _job(jobId, Status.Publishing);
         require(msg.sender == j.main, "not main");
         _beforeDeadline(j);
         require(leaves.length == j.numItems, "bad length");
         require(keccak256(abi.encode(leaves)) == j.resultsCommit, "resultsCommit mismatch");
-        emit ResultsPublished(jobId, leaves);
+        emit ResultsPublished(jobId, leaves, resultsURI);
+
+        if (compares[j.taskType] == Compare.Similar) {
+            _setPhase(j, Status.Disputing, _params.disputeWindow);
+            return;
+        }
 
         // Count disagreements over every revealed range.
         mapping(uint256 => bytes32) storage cl = checkLeaf[jobId];
@@ -410,23 +443,33 @@ contract ReplicatedMarket is MarketBase {
                 }
             }
         }
+        _startTiebreak(jobId, j);
+    }
 
-        address[] memory ex = new address[](2 + j.verifiers.length);
-        ex[0] = j.client;
-        ex[1] = j.main;
-        for (uint256 slot = 0; slot < j.verifiers.length; slot++) {
-            ex[2 + slot] = j.verifiers[slot];
+    /// @notice Compare.Similar: the client disputes `items` (strictly increasing item indices),
+    ///         typically those where M's result differs from the verifier's, or is missing. The
+    ///         tie-breaker re-runs them and judges. The client posts a bond of `tiebreakFee`: it
+    ///         pays T if the dispute turns out unfounded and comes back otherwise.
+    function dispute(uint256 jobId, uint256[] calldata items) external payable {
+        Job storage j = _job(jobId, Status.Disputing);
+        require(msg.sender == j.client, "not client");
+        _beforeDeadline(j);
+        require(msg.value == _params.tiebreakFee, "wrong bond");
+        require(items.length > 0, "no items");
+        j.disputeBond = msg.value;
+        for (uint256 x = 0; x < items.length; x++) {
+            require(items[x] < j.numItems && (x == 0 || items[x] > items[x - 1]), "bad items");
+            j.mismatched.push(items[x]);
         }
-        address t = _draw(jobId, ex, ex.length);
-        if (t == address(0)) {
-            _markAllUnresolved(j);
-            _close(jobId, Outcome.NoMajority);
-            return;
-        }
-        registry.lock(t);
-        j.tiebreaker = t;
-        _setPhase(j, Status.TieBreak, _params.tiebreakWindow + _taskTime(j.taskType, j.mismatched.length));
-        emit TiebreakStarted(jobId, t, j.mismatched);
+        emit ResultsDisputed(jobId, items);
+        _startTiebreak(jobId, j);
+    }
+
+    /// @notice Compare.Similar: the client accepts the results without a dispute.
+    function acceptResults(uint256 jobId) external {
+        Job storage j = _job(jobId, Status.Disputing);
+        require(msg.sender == j.client, "not client");
+        _closeUndisputed(jobId, j);
     }
 
     // ------------------------------------------------------------------
@@ -443,37 +486,29 @@ contract ReplicatedMarket is MarketBase {
         emit TiebreakShared(jobId, j.tiebreaker, sealedForTiebreaker);
     }
 
-    /// @notice T submits its leaves for the mismatched items (in `mismatched` order); per item the
-    ///         majority of {M, owning verifier, T} decides.
+    /// @notice Compare.Exact: T submits its leaves for the mismatched items (in `mismatched` order);
+    ///         per item the majority of {M, owning verifier, T} decides.
     function submitTiebreak(uint256 jobId, bytes32[] calldata leaves) external {
-        Job storage j = _job(jobId, Status.TieBreak);
-        require(msg.sender == j.tiebreaker, "not tiebreaker");
-        _beforeDeadline(j);
-        require(j.tieShared, "tie not shared");
-        uint256 m = j.mismatched.length;
-        require(leaves.length == m, "bad length");
-
+        Job storage j = _tiebreakSubmission(jobId, leaves.length, Compare.Exact);
         mapping(uint256 => bytes32) storage cl = checkLeaf[jobId];
-        for (uint256 x = 0; x < m; x++) {
+        for (uint256 x = 0; x < leaves.length; x++) {
             uint256 i = j.mismatched[x];
-            uint256 bit = 1 << _slotOfItem(j.numItems, i);
-            if (leaves[x] == j.mainMismatchLeaves[x]) {
-                j.outvotedMask |= bit; // T agrees with M: the verifier was wrong
-            } else if (leaves[x] == cl[i]) {
-                j.mainOutvoted = true; // T agrees with the verifier: M was wrong
-            } else {
-                j.unresolvedMask |= bit; // three different answers
-            }
+            _verdict(j, i, leaves[x] == j.mainMismatchLeaves[x], leaves[x] == cl[i]);
         }
-        j.tieSubmitted = true;
         emit TiebreakSubmitted(jobId, leaves);
+        _closeAfterTiebreak(jobId, j);
+    }
 
-        Outcome o;
-        if (j.mainOutvoted && j.outvotedMask != 0) o = Outcome.BothOutvoted;
-        else if (j.mainOutvoted) o = Outcome.MainOutvoted;
-        else if (j.outvotedMask != 0) o = Outcome.VerifierOutvoted;
-        else o = Outcome.NoMajority;
-        _close(jobId, o);
+    /// @notice Compare.Similar: T re-ran the disputed items and submits one verdict per item (in
+    ///         `mismatched` order): bit 0 set = M's result is acceptable, bit 1 set = the owning
+    ///         verifier's result is acceptable.
+    function submitJudgement(uint256 jobId, uint8[] calldata verdicts) external {
+        Job storage j = _tiebreakSubmission(jobId, verdicts.length, Compare.Similar);
+        for (uint256 x = 0; x < verdicts.length; x++) {
+            _verdict(j, j.mismatched[x], verdicts[x] & 1 != 0, verdicts[x] & 2 != 0);
+        }
+        emit JudgementSubmitted(jobId, verdicts);
+        _closeAfterTiebreak(jobId, j);
     }
 
     // ------------------------------------------------------------------
@@ -513,6 +548,8 @@ contract ReplicatedMarket is MarketBase {
                 if (j.vstate[slot] == VState.Committed) _verifierMissed(jobId, j, slot);
             }
             _setPhase(j, Status.Publishing, _params.publishWindow);
+        } else if (s == Status.Disputing) {
+            _closeUndisputed(jobId, j); // the client neither disputed nor accepted in time
         } else {
             // TieBreak
             if (j.tieShared) {
@@ -619,6 +656,70 @@ contract ReplicatedMarket is MarketBase {
         }
     }
 
+    /// Draw a tie-breaker (excluding the client, M and the verifiers) for the `mismatched` items;
+    /// with nobody eligible those items stay unresolved.
+    function _startTiebreak(uint256 jobId, Job storage j) internal {
+        address[] memory ex = new address[](2 + j.verifiers.length);
+        ex[0] = j.client;
+        ex[1] = j.main;
+        for (uint256 slot = 0; slot < j.verifiers.length; slot++) {
+            ex[2 + slot] = j.verifiers[slot];
+        }
+        address t = _draw(jobId, ex, ex.length);
+        if (t == address(0)) {
+            _markAllUnresolved(j);
+            _close(jobId, Outcome.NoMajority);
+            return;
+        }
+        registry.lock(t);
+        j.tiebreaker = t;
+        _setPhase(j, Status.TieBreak, _params.tiebreakWindow + _taskTime(j.taskType, j.mismatched.length));
+        emit TiebreakStarted(jobId, t, j.mismatched);
+    }
+
+    /// Checks shared by both tie-break submissions (`n` answers for a task compared as `c`).
+    function _tiebreakSubmission(uint256 jobId, uint256 n, Compare c) internal returns (Job storage j) {
+        j = _job(jobId, Status.TieBreak);
+        require(msg.sender == j.tiebreaker, "not tiebreaker");
+        _beforeDeadline(j);
+        require(j.tieShared, "tie not shared");
+        require(compares[j.taskType] == c, "wrong compare");
+        require(n == j.mismatched.length, "bad length");
+        j.tieSubmitted = true;
+    }
+
+    /// The rule both comparisons share, for one item i that T re-ran. If a revealed verifier
+    /// covers i: T agrees only with M -> the verifier was wrong; only with the verifier -> M was
+    /// wrong; with both -> nobody (an unfounded dispute); with neither -> unresolved.
+    /// Otherwise T judges M alone.
+    function _verdict(Job storage j, uint256 i, bool mainOk, bool verifierOk) internal {
+        uint256 slot = _slotOfItem(j.numItems, i);
+        if (slot >= j.vstate.length || j.vstate[slot] != VState.Revealed) {
+            if (!mainOk) j.mainOutvoted = true;
+        } else if (mainOk && !verifierOk) {
+            j.outvotedMask |= 1 << slot;
+        } else if (!mainOk && verifierOk) {
+            j.mainOutvoted = true;
+        } else if (!mainOk) {
+            j.unresolvedMask |= 1 << slot;
+        }
+    }
+
+    function _closeAfterTiebreak(uint256 jobId, Job storage j) internal {
+        Outcome o;
+        if (j.mainOutvoted && j.outvotedMask != 0) o = Outcome.BothOutvoted;
+        else if (j.mainOutvoted) o = Outcome.MainOutvoted;
+        else if (j.outvotedMask != 0) o = Outcome.VerifierOutvoted;
+        else if (j.unresolvedMask != 0) o = Outcome.NoMajority;
+        else o = Outcome.DisputeRejected;
+        _close(jobId, o);
+    }
+
+    /// Compare.Similar without a dispute: Verified if any verifier revealed, else Delivered.
+    function _closeUndisputed(uint256 jobId, Job storage j) internal {
+        _close(jobId, _anyState(j, VState.Revealed) ? Outcome.Verified : Outcome.Delivered);
+    }
+
     /// Draw a random active provider that offers the job's task type and is not among the first
     /// `nEx` entries of `ex`; address(0) if none.
     function _draw(uint256 jobId, address[] memory ex, uint256 nEx) internal returns (address) {
@@ -654,7 +755,7 @@ contract ReplicatedMarket is MarketBase {
         j.status = Status.Closed;
         j.outcome = outcome;
 
-        uint256 pool = 2 * j.price + j.slashedPool;
+        uint256 pool = 2 * j.price + j.slashedPool + j.disputeBond;
         if (outcome == Outcome.Cancelled) {
             _pay(jobId, j.client, pool);
             emit JobClosed(jobId, outcome);
@@ -671,7 +772,8 @@ contract ReplicatedMarket is MarketBase {
             _bump(j.main, Stat.Outvoted);
         } else if (j.unresolvedMask == 0) {
             mainPay = j.price;
-            bool verified = outcome == Outcome.Verified || outcome == Outcome.VerifierOutvoted;
+            bool verified = outcome == Outcome.Verified || outcome == Outcome.VerifierOutvoted
+                || (outcome == Outcome.DisputeRejected && _anyState(j, VState.Revealed));
             _bump(j.main, verified ? Stat.VerifiedCompleted : Stat.UnverifiedCompleted);
         }
         registry.unlock(j.main);

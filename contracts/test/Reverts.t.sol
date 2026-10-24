@@ -234,14 +234,14 @@ contract RevertsTest is DeGPUBase {
         (uint256 id, address[] memory vs) = _toChecking();
         vm.prank(vs[0]);
         vm.expectRevert(WRONG_STATUS); // still Checking
-        market.revealCheck(id, _slice(l, 0, 100), V_SALT);
+        market.revealCheck(id, _slice(l, 0, 100), V_SALT, "");
         _commitV(id, 0, l);
         _commitV(id, 1, l);
         vm.startPrank(vs[0]);
         vm.expectRevert(bytes("bad length"));
-        market.revealCheck(id, _slice(l, 0, 99), V_SALT);
+        market.revealCheck(id, _slice(l, 0, 99), V_SALT, "");
         vm.expectRevert(bytes("bad length"));
-        market.revealCheck(id, _slice(l, 0, 101), V_SALT);
+        market.revealCheck(id, _slice(l, 0, 101), V_SALT, "");
         vm.stopPrank();
     }
 
@@ -252,20 +252,20 @@ contract RevertsTest is DeGPUBase {
         _commitV(id, 1, l);
         vm.startPrank(vs[0]);
         vm.expectRevert(bytes("checkCommit mismatch"));
-        market.revealCheck(id, _slice(l, 100, 200), V_SALT); // someone else's range
+        market.revealCheck(id, _slice(l, 100, 200), V_SALT, ""); // someone else's range
         vm.expectRevert(bytes("checkCommit mismatch"));
-        market.revealCheck(id, _slice(l, 0, 100), keccak256("other salt"));
-        market.revealCheck(id, _slice(l, 0, 100), V_SALT);
+        market.revealCheck(id, _slice(l, 0, 100), keccak256("other salt"), "");
+        market.revealCheck(id, _slice(l, 0, 100), V_SALT, "");
         vm.expectRevert(bytes("not committed")); // twice
-        market.revealCheck(id, _slice(l, 0, 100), V_SALT);
+        market.revealCheck(id, _slice(l, 0, 100), V_SALT, "");
         vm.stopPrank();
         vm.prank(stranger);
         vm.expectRevert(bytes("not verifier"));
-        market.revealCheck(id, _slice(l, 0, 100), V_SALT);
+        market.revealCheck(id, _slice(l, 0, 100), V_SALT, "");
         _pastDeadline(id);
         vm.prank(vs[1]);
         vm.expectRevert(LATE);
-        market.revealCheck(id, _slice(l, 100, 200), V_SALT);
+        market.revealCheck(id, _slice(l, 100, 200), V_SALT, "");
     }
 
     // ------------------------------------------------------------------
@@ -277,24 +277,24 @@ contract RevertsTest is DeGPUBase {
         (uint256 id,) = _toChecking();
         vm.prank(A);
         vm.expectRevert(WRONG_STATUS); // verifiers haven't finished
-        market.publishResults(id, l);
+        market.publishResults(id, l, "");
 
         uint256 u = _toPublishingUnverified(A, l);
         vm.prank(B);
         vm.expectRevert(bytes("not main"));
-        market.publishResults(u, l);
+        market.publishResults(u, l, "");
         vm.startPrank(A);
         vm.expectRevert(bytes("bad length"));
-        market.publishResults(u, _slice(l, 0, N - 1));
+        market.publishResults(u, _slice(l, 0, N - 1), "");
         bytes32[] memory other = _copy(l);
         other[7] = _wrong(7, 1);
         vm.expectRevert(bytes("resultsCommit mismatch")); // can't change results after the reveal
-        market.publishResults(u, other);
+        market.publishResults(u, other, "");
         vm.stopPrank();
         _pastDeadline(u);
         vm.prank(A);
         vm.expectRevert(LATE);
-        market.publishResults(u, l);
+        market.publishResults(u, l, "");
     }
 
     function test_Tiebreak_Reverts() public {
@@ -345,7 +345,7 @@ contract RevertsTest is DeGPUBase {
         _publish(id, l);
         vm.prank(A);
         vm.expectRevert(WRONG_STATUS);
-        market.publishResults(id, l);
+        market.publishResults(id, l, "");
         vm.prank(client);
         vm.expectRevert(WRONG_STATUS);
         market.revealDecision(id, VERIFY_SALT, false);
@@ -460,15 +460,16 @@ contract RevertsTest is DeGPUBase {
     function test_Market_OnlyOwnerAddsTaskType() public {
         vm.prank(stranger);
         vm.expectRevert(bytes("not owner"));
-        market.addTaskType(bytes32(0), "x", 0);
-        uint256 id = market.addTaskType(keccak256("v2"), "image-classify-v2", 5);
+        market.addTaskType(bytes32(0), "x", 0, ReplicatedMarket.Compare.Exact);
+        uint256 id = market.addTaskType(keccak256("v2"), "image-classify-v2", 5, ReplicatedMarket.Compare.Exact);
         assertEq(id, 2);
         assertEq(market.taskTypeCount(), 2);
-        (bytes32 h, string memory name, uint64 spi) = market.taskTypeOf(1);
+        (bytes32 h, string memory name, uint64 spi, ReplicatedMarket.Compare c) = market.taskTypeOf(1);
         assertEq(h, RUNNER_HASH);
         assertEq(name, "image-classify-v1");
         assertEq(spi, 0);
-        (h, name, spi) = market.taskTypeOf(2);
+        assertEq(uint8(c), uint8(ReplicatedMarket.Compare.Exact));
+        (h, name, spi, c) = market.taskTypeOf(2);
         assertEq(h, keccak256("v2"));
         assertEq(spi, 5);
     }

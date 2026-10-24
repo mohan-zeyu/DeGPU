@@ -16,7 +16,7 @@ CLI (accounts are anvil's unlocked accounts; the client is index 1). ``post`` ha
 subcommand per installed task, with the task's own flags:
 
     uv run python -m degpu.client --registry 0x... post image-classify-v1 --main A --limit 20 --verify --wait
-    uv run python -m degpu.client --registry 0x... post nonce-search-v1 --main A --puzzles 10 --wait
+    uv run python -m degpu.client --registry 0x... post key-search-v1 --main A --keys 10 --wait
     uv run python -m degpu.client --registry 0x... results replicated:1
 """
 
@@ -130,6 +130,26 @@ class Client:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _show_results(client: Client, ref: JobRef, out_dir: str | None) -> None:
+    """Print the job's results; result files (similar tasks) are written to ``out_dir``."""
+    try:
+        results = client.results(ref)
+    except LookupError as e:
+        print(e)
+        return
+    if not any(isinstance(r, bytes) for r in results):
+        print(json.dumps(results))
+        return
+    task = get(client.jobs[ref.mode][ref.id]["task"])
+    out = Path(out_dir or f"results/{ref.mode}-{ref.id}")
+    out.mkdir(parents=True, exist_ok=True)
+    for i, r in enumerate(results):
+        if isinstance(r, bytes):
+            (out / f"item-{i:04d}{task.output_suffix}").write_bytes(r)
+    missing = [i for i, r in enumerate(results) if not isinstance(r, bytes)]
+    print(f"wrote {len(results) - len(missing)} files to {out}" + (f"; missing or invalid: {missing}" if missing else ""))
+
+
 def _resolve_main(chain: Chain, main: str) -> str:
     """A provider letter A-F (anvil accounts 2-7) or an address."""
     if main.upper() in PROVIDER_INDICES:
@@ -150,6 +170,7 @@ def main() -> int:
         p = post.add_parser(name, help=f"{task.description} ({task.mode})")
         p.add_argument("--main", required=True, help="provider letter A-F or address")
         p.add_argument("--wait", action="store_true", help="keep watching until the job closes")
+        p.add_argument("--out", help="with --wait: where to write result files (default results/<job>)")
         CLIENT_DRIVERS[task.mode].add_cli_args(p)
         task.add_cli_args(p)
 
@@ -157,6 +178,8 @@ def main() -> int:
     for name in ("results", "status", "expire", "cancel"):
         q = sub.add_parser(name)
         q.add_argument("job", type=JobRef.parse, help="<mode>:<id>, as printed by post (e.g. checked:1)")
+        if name == "results":
+            q.add_argument("--out", help="where to write result files (default results/<job>)")
     args = ap.parse_args()
 
     chain = Chain(args.rpc, registry_address=args.registry)
@@ -172,10 +195,7 @@ def main() -> int:
             while client.outcome(ref) is None:
                 client.step()
                 time.sleep(1)
-            try:
-                print(json.dumps(client.results(ref)))
-            except LookupError as e:
-                print(e)
+            _show_results(client, ref, args.out)
     elif args.cmd == "watch":
         try:
             while True:
@@ -184,7 +204,7 @@ def main() -> int:
         except KeyboardInterrupt:
             pass
     elif args.cmd == "results":
-        print(json.dumps(client.results(args.job)))
+        _show_results(client, args.job, args.out)
     elif args.cmd == "status":
         job = chain.job(args.job.mode, args.job.id)
         driver = client.drivers[args.job.mode]

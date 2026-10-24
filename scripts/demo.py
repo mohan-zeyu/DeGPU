@@ -16,11 +16,20 @@ main provider committed.
   4. lying verifiers: every provider except A answers random labels as verifier
   5. main F goes offline: time travel past the deadline, then expire()
 
-Checked mode, task nonce-search-v1 (mining puzzles at 16 bits of work): every answer is
-verified on-chain by the NonceChecker contract; the deposit is N x price.
-  6. honest mining, main A: 19 solvable puzzles + 1 impossible one; A is paid per solved puzzle
-  7. cheating miner E: its made-up nonces are rejected on-chain; it misses the deadline and
+Checked mode, task key-search-v1 (each key hidden among 2^16 values, posted as its hash):
+every answer is verified on-chain by the KeySearchChecker contract; the deposit is N x price.
+  6. honest key search, main A: 19 solvable puzzles + 1 whose key is outside its range; A is
+     paid per solved puzzle
+  7. cheating provider E: its made-up keys are rejected on-chain; it misses the deadline and
      expire() slashes it
+
+Replicated mode compared by similarity, task blender-render-v1 (12 frames of a tiny Blender
+scene; skipped with a note when Blender isn't installed): providers upload their frames, the
+client compares M's frames with the verifiers' and disputes the ones that differ, and a
+tie-breaker re-renders the disputed frames and judges.
+  8. honest render job (secret "yes"), main A: the client accepts without a dispute
+  9. cheating main E degrades 3 of the 12 frames: the client disputes exactly those, the
+     tie-breaker confirms, and E is slashed
 
 Everything runs in-process with a deterministic step loop (client first,
 then agents A-F, repeated until the job closes or nothing moves). For each
@@ -63,10 +72,12 @@ from degpu.chain import (
 from degpu.client import Client
 from degpu.storage import Store
 from degpu.tasks import get
+from degpu.tasks.blender_render_v1.task import DEMO_SCENE
 from degpu.tasks.image_classify_v1.runner import Runner
 
 IMAGE_TASK = get("image-classify-v1")
-NONCE_TASK = get("nonce-search-v1")
+KEY_TASK = get("key-search-v1")
+BLENDER_TASK = get("blender-render-v1")
 
 REPO = Path(__file__).resolve().parent.parent
 MODEL_PATH = REPO / "assets" / "mobilenetv2.onnx"
@@ -207,7 +218,7 @@ def describe(world: World, mode: str, ev) -> str:
         if n == "ResultsSubmitted":
             found = list(a["found"])
             return (f"main submits {sum(found)} answers ({len(found) - sum(found)} not found); "
-                    f"the NonceChecker accepts every one")
+                    f"the checker contract accepts every one")
     if n == "JobCreated":
         return f"client posts {a['numItems']} items to {nm(a['main'])} (decision hidden: {bytes(a['verifyCommit']).hex()[:10]}...)"
     if n == "JobAccepted":
@@ -229,10 +240,18 @@ def describe(world: World, mode: str, ev) -> str:
     if n == "CheckRevealed":
         return f"verifier {a['slot']} reveals {len(a['leaves'])} leaves"
     if n == "ResultsPublished":
-        return f"main publishes {len(a['leaves'])} leaves"
+        files = " and its result files" if a["resultsURI"] else ""
+        return f"main publishes {len(a['leaves'])} leaves{files}"
+    if n == "ResultsDisputed":
+        items = list(a["items"])
+        return f"client disputes {len(items)} items {items[:6]}{'...' if len(items) > 6 else ''} (bond posted)"
+    if n == "JudgementSubmitted":
+        v = list(a["verdicts"])
+        return (f"tie-breaker re-ran them: main's result bad on {sum(1 for x in v if not x & 1)}, "
+                f"verifier's bad on {sum(1 for x in v if not x & 2)} of {len(v)}")
     if n == "TiebreakStarted":
         m = list(a["mismatched"])
-        return f"{len(m)} items mismatch {m[:6]}{'...' if len(m) > 6 else ''}; tie-breaker drawn: {nm(a['tiebreaker'])}"
+        return f"{len(m)} items go to tie-break {m[:6]}{'...' if len(m) > 6 else ''}; tie-breaker drawn: {nm(a['tiebreaker'])}"
     if n == "TiebreakShared":
         return f"client seals the mismatched items to {nm(a['tiebreaker'])}"
     if n == "TiebreakSubmitted":
@@ -292,8 +311,8 @@ def settle_report(world: World, ref: JobRef, before: dict, events: list) -> dict
     # Cross-checks that hold for every job: the events explain every balance change.
     # wallet change net of gas == Payout events (minus what the client paid in);
     # stake change == -(ProviderSlashed events)
-    # a replicated job deposits 2 x price, a checked job N x price per item
-    paid_in = 2 * job.price if ref.mode == "replicated" else job.numItems * job.pricePerItem
+    # a replicated job deposits 2 x price (plus a bond if the client disputed), a checked job N x price
+    paid_in = 2 * job.price + job.disputeBond if ref.mode == "replicated" else job.numItems * job.pricePerItem
     mismatches = []
     for addr, (net, dstake) in deltas.items():
         from_events = payouts.get(addr, 0) - (paid_in if addr == job.client else 0)
@@ -465,40 +484,40 @@ def scenario_5(world: World) -> None:
     expect(world, deltas, job, {"client": ("0.100", "0"), "F": ("0", "-0.1")})
 
 
-MINING_PUZZLES = 20
-MINING_DIFFICULTY = 16  # about 65k hashes per puzzle
+KEY_PUZZLES = 20
+KEY_BITS = 16  # each key hides among 2^16 values: up to 65k hashes to find it
 
 
 def scenario_6(world: World) -> None:
-    header(6, f"mining, checked mode (main A, {MINING_PUZZLES - 1} puzzles at {MINING_DIFFICULTY} bits + 1 impossible)")
+    header(6, f"key search, checked mode (main A, {KEY_PUZZLES - 1} keys at {KEY_BITS} bits + 1 not in its range)")
     set_behaviors(world)
     c = world.chain
     before, blk = snapshot(world), c.block_number() + 1
-    items = NONCE_TASK.items(MINING_PUZZLES - 1, MINING_DIFFICULTY, impossible=1)
-    ref = world.job_ids[6] = world.client.post(NONCE_TASK, world.addr("A"), items)
+    items = KEY_TASK.items(KEY_PUZZLES - 1, KEY_BITS, impossible=1)
+    ref = world.job_ids[6] = world.client.post(KEY_TASK, world.addr("A"), items)
     drive(world, ref)
     job, deltas = finish(world, ref, before, blk)
     world.check(job.outcome == CheckedOutcome.DELIVERED, f"outcome {CheckedOutcome(job.outcome).name} (want DELIVERED)")
-    # paid per solved puzzle: 19 x 0.0001; the impossible puzzle's 0.0001 goes back to the client
+    # paid per solved puzzle: 19 x 0.0001; the unsolvable puzzle's 0.0001 goes back to the client
     expect(world, deltas, job, {"client": ("-0.0019", "0"), "A": ("0.0019", "0")})
-    nonces = world.client.results(ref)
-    valid = all(NONCE_TASK.check(item, n.to_bytes(32, "big")) for item, n in zip(items, nonces) if n is not None)
-    world.check(valid and nonces[-1] is None and sum(n is not None for n in nonces) == MINING_PUZZLES - 1,
-                f"the client got {MINING_PUZZLES - 1} valid nonces (e.g. {nonces[0]}) and 'not found' for the impossible puzzle")
+    keys = world.client.results(ref)
+    valid = all(KEY_TASK.check(item, k.to_bytes(32, "big")) for item, k in zip(items, keys) if k is not None)
+    world.check(valid and keys[-1] is None and sum(k is not None for k in keys) == KEY_PUZZLES - 1,
+                f"the client got {KEY_PUZZLES - 1} valid keys and 'not found' for the unsolvable puzzle")
 
 
 def scenario_7(world: World) -> None:
-    header(7, "cheating miner, checked mode (main E submits made-up nonces): rejected on-chain, then expire()")
+    header(7, "cheating provider, checked mode (main E submits made-up keys): rejected on-chain, then expire()")
     set_behaviors(world, E="cheat")
     c = world.chain
     top_up(world, "E")  # E was slashed in scenario 3
     before, blk = snapshot(world), c.block_number() + 1
-    items = NONCE_TASK.items(MINING_PUZZLES, MINING_DIFFICULTY)
-    ref = world.job_ids[7] = world.client.post(NONCE_TASK, world.addr("E"), items)
+    items = KEY_TASK.items(KEY_PUZZLES, KEY_BITS)
+    ref = world.job_ids[7] = world.client.post(KEY_TASK, world.addr("E"), items)
     job = drive(world, ref)
     st = world.agents["E"].jobs[ref.mode][ref.id]
     world.check(job.status == CheckedStatus.WORKING and "invalid answer" in st.get("rejected", ""),
-                "the NonceChecker rejected E's submission: no wrong answer is ever accepted")
+                "the KeySearchChecker rejected E's submission: no wrong answer is ever accepted")
 
     jump = job.deadline - c.now() + 1
     c.increase_time(jump)
@@ -512,6 +531,84 @@ def scenario_7(world: World) -> None:
     expect(world, deltas, job, {"client": ("0.100", "0"), "E": ("0", "-0.1")})
 
 
+RENDER_FRAMES = list(range(1, 13))
+
+
+def render_ready() -> bool:
+    """Blender is installed (and the demo scene built); otherwise print why the scenario is skipped."""
+    if not BLENDER_TASK.available():
+        print("  skipped: Blender (the pinned version) is not installed; install it and re-run the demo")
+        return False
+    if not DEMO_SCENE.exists():
+        import subprocess
+
+        from degpu.tasks.blender_render_v1.render import find_blender
+
+        print("  building the demo scene with Blender ...")
+        subprocess.run([find_blender(), "-b", "--factory-startup", "--python", str(REPO / "scripts" / "make_demo_scene.py"),
+                        "--", str(DEMO_SCENE)], check=True, capture_output=True)
+    return True
+
+
+def post_render(world: World, main: str, verify: bool) -> JobRef:
+    return world.client.post(BLENDER_TASK, world.addr(main), BLENDER_TASK.inputs(DEMO_SCENE, RENDER_FRAMES),
+                             verify=verify)
+
+
+def scenario_8(world: World) -> None:
+    header(8, f"render job compared by similarity (main A, {len(RENDER_FRAMES)} frames, secret decision: yes)")
+    if not render_ready():
+        return
+    from degpu.tasks.blender_render_v1 import similarity
+
+    set_behaviors(world)
+    before, blk = snapshot(world), world.chain.block_number() + 1
+    ref = world.job_ids[8] = post_render(world, "A", True)
+    drive(world, ref, max_rounds=40)
+    job, deltas = finish(world, ref, before, blk)
+    world.check(job.outcome == Outcome.VERIFIED, f"outcome {Outcome(job.outcome).name} (want VERIFIED)")
+    expect(world, deltas, job, {
+        "client": ("-0.024", "0"),
+        "A": ("0.012", "0"),
+        "verifier0": ("0.006", "0"),
+        "verifier1": ("0.006", "0"),
+    })
+    review = world.client.jobs[ref.mode][ref.id].get("review", {})
+    world.check(review.get("compared") == len(RENDER_FRAMES) and review.get("disputed") == [],
+                f"the client compared all {len(RENDER_FRAMES)} frames with the verifiers' and disputed none")
+    frames = world.client.results(ref)
+    local = BLENDER_TASK.run(BLENDER_TASK.load(DEMO_SCENE.read_bytes()), [b"%d" % f for f in RENDER_FRAMES])
+    psnrs = [similarity.min_tile_psnr(a, b) for a, b in zip(frames, local)]
+    shown = ", ".join("inf" if p == float("inf") else f"{p:.0f}" for p in psnrs)
+    print(f"  worst-tile PSNR of A's frames vs a fresh local render (dB): {shown}")
+
+
+def scenario_9(world: World) -> None:
+    header(9, f"render job, cheating main (E degrades 3 of {len(RENDER_FRAMES)} frames, secret decision: yes)")
+    if not render_ready():
+        return
+    set_behaviors(world, E="cheat")
+    e = world.agents["E"]
+    e.cheat_fraction = 0.25
+    top_up(world, "E")  # E was slashed in scenario 7
+    before, blk = snapshot(world), world.chain.block_number() + 1
+    ref = world.job_ids[9] = post_render(world, "E", True)
+    drive(world, ref, max_rounds=40)
+    job, deltas = finish(world, ref, before, blk)
+    e.cheat_fraction = 0.2
+    world.check(job.outcome == Outcome.MAIN_OUTVOTED, f"outcome {Outcome(job.outcome).name} (want MAIN_OUTVOTED)")
+    expect(world, deltas, job, {
+        "client": ("0.286", "0"),
+        "E": ("0", "-0.3"),
+        "verifier0": ("0.006", "0"),
+        "verifier1": ("0.006", "0"),
+        "tiebreaker": ("0.002", "0"),
+    })
+    faked = e.jobs[ref.mode][ref.id].get("cheated", [])
+    world.check([int(i) for i in job.mismatched] == faked and len(faked) == 3,
+                f"the client disputed exactly E's {len(faked)} degraded frames, and the tie-breaker confirmed")
+
+
 def print_reputation(world: World) -> None:
     print()
     print("Reputation counters (ProviderRegistry stats, per market) and stakes:")
@@ -519,7 +616,7 @@ def print_reputation(world: World) -> None:
             ("replicated", "missed", Stat.MISSED), ("replicated", "outvoted", Stat.OUTVOTED),
             ("replicated", "checks", Stat.CHECKS_COMPLETED), ("replicated", "chkMiss", Stat.CHECKS_MISSED),
             ("replicated", "chkOutv", Stat.CHECKS_OUTVOTED),
-            ("checked", "mined", CheckedStat.COMPLETED), ("checked", "minMiss", CheckedStat.MISSED),
+            ("checked", "solvJobs", CheckedStat.COMPLETED), ("checked", "solvMiss", CheckedStat.MISSED),
             ("checked", "solved", CheckedStat.ITEMS_SOLVED), ("checked", "notFound", CheckedStat.ITEMS_NOT_FOUND)]
     print("    " + f"{'':<4}{'stake':>8}" + "".join(f"{n:>9}" for _, n, _ in cols))
     for name in PROVIDER_NAMES:
@@ -528,7 +625,8 @@ def print_reputation(world: World) -> None:
         print(f"    {name:<4}{world.chain.stake(a) / ETHER:>8.3f}{stats}")
 
 
-SCENARIOS = (scenario_1, scenario_2, scenario_3, scenario_4, scenario_5, scenario_6, scenario_7)
+SCENARIOS = (scenario_1, scenario_2, scenario_3, scenario_4, scenario_5, scenario_6, scenario_7,
+             scenario_8, scenario_9)
 
 
 def main() -> int:

@@ -1,6 +1,16 @@
-# DeGPU shared interface spec, v3
+# DeGPU shared interface spec, v4
 
 This file is the contract between every part of DeGPU. It pins every name, encoding and rule so the Solidity side and the Python side match exactly. If you find a contradiction, don't silently diverge: follow the spec and note the problem.
+
+**What changed in v4:**
+- **Results compared by similarity.** In the replicated mode, each task type now says how its results are compared (`Compare.Exact` or `Compare.Similar`).
+  - Exact tasks work as in v3.
+  - Similar tasks (`blender-render-v1`) return **files**. They travel encrypted through the store, and each leaf pins one file's hash.
+  - After `publishResults`, a similar job enters **Disputing**. The client compares M's files with each verifier's using the task's pinned metric, then either calls `acceptResults` or calls `dispute` with a bond.
+  - The tie-breaker re-runs the disputed items and calls `submitJudgement` with one verdict per item.
+  - Both comparisons share one verdict rule and the same settlement.
+  - A new outcome, **DisputeRejected**, covers a dispute in which nobody was wrong.
+- **Task availability.** A task can report that it can't run on a machine (`available()`, e.g. Blender missing). Agents don't offer such a task.
 
 **What changed in v3:**
 - **Job types are plugins.** A task is a folder under `degpu/tasks/` and picks a **verification mode**. Each mode is one market contract plus an off-chain driver in `degpu/modes/`. How to add a task: [ADDING_A_JOB_TYPE.md](ADDING_A_JOB_TYPE.md).
@@ -39,7 +49,7 @@ This file is the contract between every part of DeGPU. It pins every name, encod
 | `itemHash` | `keccak256(item blob)` |
 | `sharedHash` | `keccak256(shared blob)`, or 32 zero bytes if the job has none (the shared blob of `image-classify-v1` is the model) |
 | `dataHash` | `keccak256(abi.encode(bytes32 sharedHash, bytes32[] itemHashes))` |
-| `word` | the task's 32-byte result for one item; for `image-classify-v1`, the label as a uint256 |
+| `word` | the task's 32-byte result for one item: for `image-classify-v1`, the label as a uint256; for a similar task, `keccak256(result file bytes)` |
 | `leaf(i)` | `keccak256(abi.encode(bytes32 jobSalt, uint256 i, bytes32 word))` |
 | `resultsCommit` | `keccak256(abi.encode(bytes32[] leaves))` (all N leaves, in index order) |
 | `verifyCommit` | `keccak256(abi.encode(bytes32 verifySalt, bool verify))` |
@@ -53,8 +63,8 @@ Because a word is a 32-byte big-endian value, `leaf` with an integer word is byt
 | Name | Definition |
 |---|---|
 | `itemsHash` | `keccak256(abi.encode(bytes[] items))` |
-| `nonce-search-v1` item | `abi.encode(bytes32 challenge, uint256 target)` |
-| `nonce-search-v1` answer | a 32-byte nonce, valid if `uint256(keccak256(abi.encode(challenge, nonce))) < target` |
+| `key-search-v1` item | `abi.encode(bytes32 keyHash, uint256 lo, uint256 hi)` |
+| `key-search-v1` answer | the key k as a uint256, valid if `lo ≤ k < hi` and `keccak256(abi.encode(k)) == keyHash` |
 
 **Ranges:** with `m = numVerifiers` (demo 2), verifier slot `j` covers items `[j*N/m, (j+1)*N/m)` (integer division). The ranges are public once the verifiers are drawn; by then M has already committed.
 
@@ -69,8 +79,8 @@ checkCommit(0x33.., [leaf(0x11..,0,1), leaf(0x11..,1,2)]) = 0x50ea9093e9d3cc68aa
 verifyCommit(0x88.., true)                  = 0xa2f6db48e4217cc07583f9ea52bd1fc0e90a717552373e82eea50b3a6ff9c928
 verifyCommit(0x88.., false)                 = 0x571c2a6cc17bceba7d421165d8f2117dc954cbf951b4ebbb0cf9b95697b23540
 dataHash(0x44.., [0x55.., 0x66..])          = 0x04ca3cee6744183786df649e62c82e681a1cc158de1e3a465006d79d9b48bdd3
-keccak256(abi.encode(0x11.., bytes32(7)))   = 0xea2cda56caceff556aeeb2756e2c1a820445b6413765d79997510293af0f2e35
-nonce-search: first nonce with hash < 2^248 for challenge 0x11..  = 218
+keccak256(abi.encode(uint256(42)))          = 0xbeced09521047d05b8960b7e7bcc1d1292cf3e4b2a6b63f48335cbde5f7545d2
+key-search: the key of that hash in [0, 100) is 42
 ```
 
 ## 3. Keys, encryption, sealed payloads (replicated mode, Python only)
@@ -79,6 +89,8 @@ nonce-search: first nonce with hash < 2^248 for challenge 0x11..  = 218
   - `job_salt = HKDF(k_job, b"degpu/job-salt")`
   - `shared_key = HKDF(k_job, b"degpu/model")`. The label predates the generic name and is kept so the vectors stay valid.
   - `item_key(i) = HKDF(k_job, b"degpu/item/%d" % i)`
+  - `result_key(i) = HKDF(k_job, b"degpu/result/%d" % i)`: M's result file for item i (similar tasks)
+  - `check_result_key(j, i) = HKDF(k_job, b"degpu/check-result/%d/%d" % (j, i))`: verifier slot j's result file for item i (similar tasks)
   - Golden vectors for `k_job = 0x77..`:
     - `job_salt` = `0xe498e837d1aa76f441e8e27856448c4991f2e73b5d94dcf8745c92e68656ce64`
     - `shared_key` = `0x25e5692a3174ace83b0eefef011757a926e43a5b61a64bb883b2e073b6d7cbf9`
@@ -89,6 +101,9 @@ nonce-search: first nonce with hash < 2^248 for challenge 0x11..  = 218
   - for M (`createJob`): `{"k_job": "0x.."}`
   - for verifier slot j (`shareRange`): `{"job_salt": "0x..", "shared_key": "0x..", "start": s, "end": e, "item_keys": {"<i>": "0x..", ...}}`
   - for T (`shareTiebreak`): `{"job_salt": "0x..", "shared_key": "0x..", "indices": [..], "item_keys": {...}}`
+  - **Similar tasks add:**
+    - for verifier slot j: `"result_keys": {"<i>": check_result_key(j, i)}` for its range;
+    - for T: `"main_result_keys": {"<i>": result_key(i)}` and `"check_result_keys": {"<i>": check_result_key(j, i)}` for the disputed items.
 - **Secrets:** `verifySalt` and `vSalt` are random 32 bytes. The client keeps `verifySalt` and its yes/no decision until it reveals them.
 - **Checked mode has no secrets:** items are posted on-chain in the clear.
 
@@ -100,6 +115,10 @@ nonce-search: first nonce with hash < 2^248 for challenge 0x11..  = 218
   - The `uri`s point at ciphertexts.
   - The `hash`es are keccak256 of the plaintexts.
   - `degpu/modes/replicated.py` writes it (`pack_inputs`) and checks it (`load_inputs`).
+- **Results manifest (similar tasks):**
+  - plaintext JSON `{"items": {"<i>": "store:.."}}`, where each URI points at a result file encrypted with its result key;
+  - M announces it in `publishResults(.., resultsURI)`, and each verifier in `revealCheck(.., resultsURI)`;
+  - a reader accepts a file only if `leaf(jobSalt, i, keccak256(file))` equals the on-chain leaf (`load_results`).
 
 ## 5. Tasks
 
@@ -113,11 +132,11 @@ nonce-search: first nonce with hash < 2^248 for challenge 0x11..  = 218
 
 | Task | Mode | Shared blob / items | Word / answer | Price (demo) | secondsPerItem |
 |---|---|---|---|---|---|
-| `image-classify-v1` | replicated | ONNX model / encoded images. MobileNetV2 preprocessing and inference as in `runner.py` (top-1 index, one image per batch) | label as uint256 (0..999) | 0.0001 ETH | 1 |
-| `nonce-search-v1` | checked | — / `abi.encode(challenge, target)` | nonce | 0.0001 ETH | 2 |
+| `image-classify-v1` | replicated, exact | ONNX model / encoded images. MobileNetV2 preprocessing and inference as in `runner.py` (top-1 index, one image per batch) | label as uint256 (0..999) | 0.0001 ETH | 1 |
+| `blender-render-v1` | replicated, similar | `.blend` scene / frame numbers. Rendered with Blender 5.2 Cycles; `render.py` forces the settings | a PNG per frame, similar if every tile of an 8×8 grid is within the tolerance (`similarity.py`) | 0.001 ETH | 30 |
 | `key-search-v1` | checked | — / `abi.encode(bytes32 keyHash, uint256 lo, uint256 hi)` | key k with `lo ≤ k < hi` and `keccak256(abi.encode(k)) == keyHash` | 0.0001 ETH | 2 |
 
-`key-search-v1` was added by following ADDING_A_JOB_TYPE.md. `Chain.deploy` registers it, but `Deploy.s.sol` doesn't. Its golden vector: `keccak256(abi.encode(uint256(42))) = 0xbeced09521047d05b8960b7e7bcc1d1292cf3e4b2a6b63f48335cbde5f7545d2`, and the key of that hash in [0, 100) is 42.
+`key-search-v1` was added by following ADDING_A_JOB_TYPE.md; its golden vector is in section 2. Mining (`nonce-search-v1`) was dropped, because a provider would keep a valid nonce for itself rather than hand it in.
 
 ## 6. `ProviderRegistry.sol`
 
@@ -158,6 +177,7 @@ struct Params {
   uint64 checkWindow;    // demo 600: + secondsPerItem * ceil(N / numVerifiers) after the draw
   uint64 revealWindow;   // demo 300
   uint64 publishWindow;  // demo 300
+  uint64 disputeWindow;  // demo 300: similar tasks, the client reviews the results
   uint64 tiebreakWindow; // demo 600: + secondsPerItem * mismatched.length
   uint256 tiebreakFee;   // demo 0.002 ether
   uint16 wrongSlashBps;  // demo 3000
@@ -166,8 +186,9 @@ struct Params {
   uint16 maxMismatch;    // demo 0
   uint8 numVerifiers;    // demo 2
 }
-enum Status  { None, Open, Committing, Deciding, Checking, CheckReveal, Publishing, TieBreak, Closed }
-enum Outcome { None, Cancelled, Delivered, Verified, MainOutvoted, VerifierOutvoted, BothOutvoted, NoMajority, MainMissed, TiebreakerMissed, TieClientNoShare }
+enum Status  { None, Open, Committing, Deciding, Checking, CheckReveal, Publishing, Disputing, TieBreak, Closed }
+enum Outcome { None, Cancelled, Delivered, Verified, MainOutvoted, VerifierOutvoted, BothOutvoted, NoMajority, MainMissed, TiebreakerMissed, TieClientNoShare, DisputeRejected }
+enum Compare { Exact, Similar }   // per task type
 enum Drop    { None, ClientNoReveal, NoEligibleVerifier }
 enum VState  { None, Assigned, Shared, Committed, Revealed, NoShare, BadInput, Missed, Outvoted }
 enum Stat    { VerifiedCompleted, UnverifiedCompleted, Missed, Outvoted, ChecksCompleted, ChecksMissed, ChecksOutvoted }
@@ -179,12 +200,13 @@ struct Job {
   Status status; Outcome outcome; Drop drop;
   bool decided; bool verify; bool tieShared; bool tieSubmitted; bool mainOutvoted;
   bytes32 resultsCommit; uint64 deadline; uint256 slashedPool;
+  uint256 disputeBond;           // similar tasks: what the client paid to dispute (= tiebreakFee)
   uint256 outvotedMask; uint256 unresolvedMask;
   address[] verifiers; VState[] vstate; bytes32[] vcommit;
   uint256[] mismatched; bytes32[] mainMismatchLeaves;
 }
-addTaskType(bytes32 runnerHash, string name, uint64 secondsPerItem) returns (uint256)   // owner only
-taskTypeOf(id) -> (runnerHash, name, secondsPerItem); getJob; params; jobCount
+addTaskType(bytes32 runnerHash, string name, uint64 secondsPerItem, Compare compare) returns (uint256)   // owner only
+taskTypeOf(id) -> (runnerHash, name, secondsPerItem, compare); getJob; params; jobCount
 rangeOf(jobId, slot) -> (start, end); feeOf(jobId, slot); checkLeafOf(jobId, i)
 ```
 
@@ -203,10 +225,13 @@ Every function reverts on the wrong caller, the wrong status, or a passed deadli
 | `commitCheck(jobId, bytes32 commit)` | a verifier of the job | Checking, own state `Shared`, `commit != 0` | → `Committed`; emit `CheckCommitted(jobId, slot)`; advance if no slot is still `Assigned`/`Shared` |
 | `reportBadInput(jobId)` | verifier (Checking, own state `Shared`) **or** tie-breaker (TieBreak, `tieShared`) | — | verifier → `BadInput`, unlock, emit `VerifierDropped(jobId, slot, BadInput)`, advance if possible. Tie-breaker: close **TieClientNoShare** |
 | (advance from Checking) | — | every slot is in `Committed`, `BadInput`, `NoShare` or `Missed` | if any `Committed`: CheckReveal, deadline = now + revealWindow; else Publishing, deadline = now + publishWindow |
-| `revealCheck(jobId, bytes32[] leaves, bytes32 vSalt)` | a verifier | CheckReveal, own state `Committed`, `leaves.length == end − start`, `checkCommit` matches | store `checkLeaf[i]` for its range; → `Revealed`; emit `CheckRevealed(jobId, slot, leaves)`; if no slot is still `Committed`: Publishing, deadline = now + publishWindow |
-| `publishResults(jobId, bytes32[] leaves)` | main | Publishing, `leaves.length == numItems`, `resultsCommit` matches | emit `ResultsPublished(jobId, leaves)`. For every `Revealed` slot, compare M's leaves with `checkLeaf` over its range. If mismatches ≤ maxMismatch: close **Verified** if any slot is `Revealed`, else **Delivered**. Otherwise store the mismatches (indices + M's leaves) and draw T, excluding client, M and all verifiers. If no T: close **NoMajority**. Else lock T, TieBreak, deadline = now + tiebreakWindow + secondsPerItem·#mismatched, emit `TiebreakStarted(jobId, T, mismatched)` |
+| `revealCheck(jobId, bytes32[] leaves, bytes32 vSalt, string resultsURI)` | a verifier | CheckReveal, own state `Committed`, `leaves.length == end − start`, `checkCommit` matches | store `checkLeaf[i]` for its range; → `Revealed`; emit `CheckRevealed(jobId, slot, leaves, resultsURI)` (the URI of its result files, `""` for exact tasks); if no slot is still `Committed`: Publishing, deadline = now + publishWindow |
+| `publishResults(jobId, bytes32[] leaves, string resultsURI)` | main | Publishing, `leaves.length == numItems`, `resultsCommit` matches | emit `ResultsPublished(jobId, leaves, resultsURI)`. **Similar task:** Disputing, deadline = now + disputeWindow. **Exact task:** for every `Revealed` slot, compare M's leaves with `checkLeaf` over its range. If mismatches ≤ maxMismatch: close **Verified** if any slot is `Revealed`, else **Delivered**. Otherwise store the mismatches (indices + M's leaves) and draw T, excluding client, M and all verifiers. If no T: close **NoMajority**. Else lock T, TieBreak, deadline = now + tiebreakWindow + secondsPerItem·#mismatched, emit `TiebreakStarted(jobId, T, mismatched)` |
+| `dispute(jobId, uint256[] items) payable` | client | Disputing (similar tasks only); `msg.value == tiebreakFee` (the bond); items non-empty, strictly increasing, `< numItems` | store the bond; `mismatched = items`; emit `ResultsDisputed`; draw T as above (no T → **NoMajority**) |
+| `acceptResults(jobId)` | client | Disputing | close **Verified** if any slot is `Revealed`, else **Delivered** |
 | `shareTiebreak(jobId, bytes sealedForTiebreaker)` | client | TieBreak, not shared | `tieShared = true`; emit `TiebreakShared` |
-| `submitTiebreak(jobId, bytes32[] leaves)` | tie-breaker | TieBreak, `tieShared`, length == `mismatched.length` | per mismatched item i, owned by slot j: T's leaf == M's → slot j outvoted; else T's leaf == `checkLeaf[i]` → M outvoted; else unresolved. Emit `TiebreakSubmitted`; close with the outcome below |
+| `submitTiebreak(jobId, bytes32[] leaves)` | tie-breaker | exact task; TieBreak, `tieShared`, length == `mismatched.length` | per item: `verdict(i, T's leaf == M's, T's leaf == checkLeaf[i])`; emit `TiebreakSubmitted`; close with the outcome below |
+| `submitJudgement(jobId, uint8[] verdicts)` | tie-breaker | similar task; TieBreak, `tieShared`, length == `mismatched.length` | per item: `verdict(i, bit 0, bit 1)` where bit 0 = M's result acceptable, bit 1 = the owning verifier's; emit `JudgementSubmitted`; close with the outcome below |
 | `expire(jobId)` | anyone | now > deadline, not Closed | see below |
 
 **`expire` by status:**
@@ -219,13 +244,26 @@ Every function reverts on the wrong caller, the wrong status, or a passed deadli
   - then advance.
 - **CheckReveal:** `Committed` slots → `Missed` (same slash), then Publishing with deadline = now + publishWindow.
 - **Publishing** → MainMissed.
+- **Disputing:** the client neither disputed nor accepted; the job closes as with `acceptResults`.
 - **TieBreak:** if `!tieShared`, TieClientNoShare; otherwise TiebreakerMissed (slash T by `checkMissedSlashBps`).
+
+**The verdict rule (both comparisons), per item i that T re-ran:**
+
+| | Effect |
+|---|---|
+| a `Revealed` verifier covers i, M ok and verifier not | the verifier's slot is outvoted |
+| a `Revealed` verifier covers i, verifier ok and M not | M is outvoted |
+| a `Revealed` verifier covers i, both ok | nobody (the dispute was unfounded) |
+| a `Revealed` verifier covers i, neither ok | the slot is unresolved |
+| no `Revealed` verifier covers i (e.g. an unverified job) | M is outvoted if not ok; T judges alone |
+
+For exact tasks "ok" means "T's leaf equals that side's leaf", so this is exactly the v2 rule.
 
 **Draw:** `_draw(jobId, exclusions...)` mixes prevrandao, the previous blockhash and a nonce. It skips providers that are inactive, excluded, or that **don't offer the job's task type**, and returns `address(0)` if none is left.
 
 ### Settlement on close (per party; the client gets the rest)
 
-`pool = 2 * price + slashedPool` (+ any slash taken at close). Payouts are made in the order main → verifiers → T → client. Each payout emits `Payout`, each slash emits `ProviderSlashed`. Closing unlocks everyone still locked and emits `JobClosed`. The market holds no ETH once all its jobs are closed.
+`pool = 2 * price + slashedPool + disputeBond` (+ any slash taken at close). Payouts are made in the order main → verifiers → T → client. Each payout emits `Payout`, each slash emits `ProviderSlashed`. Closing unlocks everyone still locked and emits `JobClosed`. The market holds no ETH once all its jobs are closed.
 
 - **Main** is paid `price` unless:
   - it missed a deadline (slash `missedSlashBps`, bump Missed);
@@ -233,7 +271,7 @@ Every function reverts on the wrong caller, the wrong status, or a passed deadli
   - the outcome is NoMajority or TiebreakerMissed (unpaid, no slash);
   - the job was Cancelled.
 
-  When paid, it bumps VerifiedCompleted if any slot was `Revealed`, otherwise UnverifiedCompleted.
+  When paid, it bumps VerifiedCompleted if the outcome is Verified or VerifierOutvoted, or DisputeRejected with a `Revealed` slot; otherwise UnverifiedCompleted.
 - **Verifier slot j** is paid `feeOf(slot)` if any of these hold:
   - it is `NoShare` (the client's fault);
   - it is `Revealed`, wasn't outvoted, and (unless the outcome is TieClientNoShare) none of its items are unresolved;
@@ -241,7 +279,7 @@ Every function reverts on the wrong caller, the wrong status, or a passed deadli
 
   If it was outvoted: slash `wrongSlashBps`, state `Outvoted`, bump ChecksOutvoted. A paid `Revealed` slot bumps ChecksCompleted.
 - **T** is paid `min(tiebreakFee, what's left)` if it submitted, and bumps ChecksCompleted. If it missed: slash, bump ChecksMissed.
-- **Client** gets everything left: the unused deposit (for unverified jobs, the whole fee) plus all slashed stake.
+- **Client** gets everything left: the unused deposit (for unverified jobs, the whole fee) plus all slashed stake. The dispute bond therefore pays T when nobody was slashed, and comes back otherwise.
 
 **Outcome label** (for `JobClosed`):
 - Cancelled, MainMissed, TiebreakerMissed, TieClientNoShare as above.
@@ -250,7 +288,8 @@ Every function reverts on the wrong caller, the wrong status, or a passed deadli
   - **BothOutvoted** if M and a verifier were outvoted;
   - **MainOutvoted** if only M was;
   - **VerifierOutvoted** if only verifiers were;
-  - **NoMajority** if no one was outvoted.
+  - **NoMajority** if no one was outvoted but some item is unresolved;
+  - **DisputeRejected** if no one was outvoted and nothing is unresolved.
 
 **Events:**
 - Job lifecycle:
@@ -264,12 +303,14 @@ Every function reverts on the wrong caller, the wrong status, or a passed deadli
   - `RangeShared(uint256 indexed jobId, uint256 slot, address indexed verifier, bytes sealedForVerifier)`
   - `CheckCommitted(uint256 indexed jobId, uint256 slot)`
   - `VerifierDropped(uint256 indexed jobId, uint256 slot, VState reason)`
-  - `CheckRevealed(uint256 indexed jobId, uint256 slot, bytes32[] leaves)`
+  - `CheckRevealed(uint256 indexed jobId, uint256 slot, bytes32[] leaves, string resultsURI)`
 - Results and tie-break:
-  - `ResultsPublished(uint256 indexed jobId, bytes32[] leaves)`
+  - `ResultsPublished(uint256 indexed jobId, bytes32[] leaves, string resultsURI)`
+  - `ResultsDisputed(uint256 indexed jobId, uint256[] items)`
   - `TiebreakStarted(uint256 indexed jobId, address indexed tiebreaker, uint256[] mismatched)`
   - `TiebreakShared(uint256 indexed jobId, address indexed tiebreaker, bytes sealedForTiebreaker)`
   - `TiebreakSubmitted(uint256 indexed jobId, bytes32[] leaves)`
+  - `JudgementSubmitted(uint256 indexed jobId, uint8[] verdicts)`
 - Settlement: `JobClosed(uint256 indexed jobId, Outcome outcome)`, plus `Payout` and `ProviderSlashed` from `MarketBase`.
 
 ## 8. `CheckedMarket.sol` and `IChecker.sol`
@@ -311,7 +352,7 @@ taskTypeOf(id) -> (checker, name, secondsPerItem); getJob; params; jobCount
 
 M is unlocked on every close after accept.
 
-**`NonceChecker`** (`contracts/src/checkers/NonceChecker.sol`) is the checker of `nonce-search-v1`; see the encodings in section 2.
+**`KeySearchChecker`** (`contracts/src/checkers/KeySearchChecker.sol`) is the checker of `key-search-v1`; see the encodings in section 2.
 
 ## 9. Python API
 
@@ -320,10 +361,14 @@ M is unlocked on every close after accept.
   - `Chain.deploy()` deploys everything and registers every installed task.
   - Helpers: `task_id(name)`, `price_of(addr, mode, id)`, `stat(addr, mode, stat)`, `job(mode, id)` and `events(mode, from_block, job_id=)`.
   - `JobRef(mode, id)` identifies a job, written `"checked:1"`.
-- **`degpu/tasks/`:** the task interface (`base.py`) and the task registry (`all_tasks()`, `get(name)`). See ADDING_A_JOB_TYPE.md.
+- **`degpu/tasks/`:**
+  - the task interface (`base.py`): `ReplicatedTask` (exact), `SimilarTask` (similar), `CheckedTask`, plus `available()`;
+  - the task registry: `all_tasks()` and `get(name)`.
+
+  See ADDING_A_JOB_TYPE.md.
 - **`degpu/modes/`:** one `ProviderDriver` and one `ClientDriver` per mode (`base.py`, `replicated.py`, `checked.py`), listed in `PROVIDER_DRIVERS` and `CLIENT_DRIVERS`.
 - **`ProviderAgent(chain, account, behavior, tasks=None, ...)`:**
-  - `register()` stakes, publishes the key and offers every task at its `default_price`.
+  - `register()` stakes, publishes the key and offers every task at its `default_price`, except tasks that aren't `available()` here.
   - `step()` runs every mode driver.
   - Behaviours:
     - `honest`;
@@ -337,7 +382,7 @@ M is unlocked on every close after accept.
   - `python -m degpu.chain`
   - `python -m degpu.agent --index N --registry 0x..`
   - `python -m degpu.client --registry 0x.. post <task> --main A [mode and task flags] [--wait]`
-  - `python -m degpu.client --registry 0x.. results|status|expire|cancel <mode>:<id>`
+  - `python -m degpu.client --registry 0x.. results|status|expire|cancel <mode>:<id>`; `results` writes result files to `--out DIR` (default `results/<job>`)
 
 ## 10. Demo (`scripts/demo.py`)
 
@@ -345,7 +390,8 @@ Setup:
 - a fresh anvil;
 - providers A–F register with 1 ETH, and each offers both tasks at 0.0001 ETH per item;
 - the replicated jobs use 200 images, so price = 0.020, deposit = 0.040, and each verifier covers 100 items (fee 0.010 each);
-- the mining jobs use 20 puzzles at 16 bits of work.
+- the key-search jobs use 20 puzzles, each hiding its key among 2^16 values;
+- the render jobs use 12 frames of the demo scene at 0.001 ETH per frame, so price = 0.012 and deposit = 0.024. They are skipped when Blender isn't installed.
 
 | # | Scenario | Main | Mode / decision | Behaviour | Expected (net of gas) |
 |---|---|---|---|---|---|
@@ -354,7 +400,9 @@ Setup:
 | 3 | Cheater caught | E (`cheat` 0.2) | replicated, yes | others honest | E slashed 0.3; V0, V1 +0.010; T +0.002; client +0.278. Always caught, no retry |
 | 4 | Lying verifiers | A | replicated, yes | every other provider `liar` (verifier role only) | both verifiers slashed 0.3; A +0.020; T +0.002; client +0.578 |
 | 5 | Main offline | F (`offline`) | replicated, no | — | `expire` in Committing → F slashed 0.1; client +0.100 |
-| 6 | Honest mining | A | checked | 19 solvable + 1 impossible puzzle | A +0.0019; client −0.0019 (the impossible puzzle is refunded) |
-| 7 | Cheating miner | E (`cheat`, stake topped up) | checked | made-up nonces | submission reverts "invalid answer"; `expire` → E slashed 0.1; client +0.100 |
+| 6 | Honest key search | A | checked | 19 solvable + 1 puzzle whose key is outside its range | A +0.0019; client −0.0019 (the unsolvable puzzle is refunded) |
+| 7 | Cheating provider | E (`cheat`, stake topped up) | checked | made-up keys | submission reverts "invalid answer"; `expire` → E slashed 0.1; client +0.100 |
+| 8 | Honest render | A | replicated similar, yes | all honest | the client accepts without a dispute; client −0.024; A +0.012; V0, V1 +0.006 each |
+| 9 | Cheating render | E (`cheat` 0.25, stake topped up) | replicated similar, yes | 3 degraded frames | the client disputes exactly those; T confirms; E slashed 0.3; V0, V1 +0.006; T +0.002; client +0.286 |
 
 The demo also prints the on-chain `createJob` data for jobs 1 and 2 side by side, to show they look identical (same value, no decision visible) until the reveal.

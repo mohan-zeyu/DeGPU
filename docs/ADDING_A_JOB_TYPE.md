@@ -2,13 +2,13 @@
 
 DeGPU separates two ideas:
 
-- **Job type (task):** what a provider computes, for example classifying images or mining.
+- **Job type (task):** what a provider computes, for example classifying images or finding a hidden key.
   Adding one is routine, and this guide is about that.
 - **Verification mode:** how the platform knows an answer is right. Each mode is one market contract plus an off-chain driver. There are two today:
 
   | Mode | Market contract | How an answer is judged |
   |---|---|---|
-  | `replicated` | `ReplicatedMarket` | Random verifiers re-run the items and the contract compares hashes; a tie-breaker settles mismatches |
+  | `replicated` | `ReplicatedMarket` | Random verifiers re-run the items; a tie-breaker settles mismatches. The task picks the comparison: **exact** (the contract compares result hashes) or **similar** (the client compares result files with the task's metric and disputes the ones that differ) |
   | `checked` | `CheckedMarket` | A checker contract tests each answer on-chain |
 
 A new job type for an existing mode is one folder under `degpu/tasks/`. A checked task also needs one small checker contract. Nothing else changes, because deployment, the provider agents, the client CLI and the conformance tests all find tasks through `degpu.tasks.all_tasks()`. To show a task in `scripts/demo.py`, add a scenario there; the demo's helpers already work for any task.
@@ -18,16 +18,21 @@ A new job type for an existing mode is one folder under `degpu/tasks/`. A checke
 Answer these in order:
 
 1. **Can a cheap on-chain check tell whether an answer is right?** A few hashes or a little arithmetic per item is cheap. If yes, use **checked**. Examples:
-   - mining: find a nonce whose hash is below a target;
    - key search: find the key in a range that hashes to a given value;
    - factoring a number, or a sudoku solution.
-2. **Otherwise: is each item's result deterministic, and is the set of possible results small?** Deterministic means bit-identical on every honest machine. Small means about 10,000 possible values or fewer. If both hold, use **replicated**. Examples:
+
+   A checked task must also pass two tests:
+   - **The answer must be worth nothing outside the job.** Otherwise the provider keeps it instead of handing it in. This is why mining was dropped: a valid nonce is worth more to the provider spent on a real chain than delivered for the job's fee.
+   - **The answer may become public.** Answers are submitted on-chain in the clear, so anyone can read them.
+2. **Otherwise: is each item's result deterministic, and is the set of possible results small?** Deterministic means bit-identical on every honest machine. Small means about 10,000 possible values or fewer. If both hold, use **replicated, exact** (`ReplicatedTask`, [section 4](#4-a-replicated-task-step-by-step)). Examples:
    - image or text classification;
    - any "pick one of K labels" model.
-3. **Neither?** Then no mode fits yet; see [section 6](#6-when-no-mode-fits). Examples:
+3. **Otherwise: can the work be re-run, with honest results that come out only approximately alike, or too large to enumerate?** If so, and you can write a deterministic test of "close enough", use **replicated, similar** (`SimilarTask`, [section 4b](#4b-a-similar-task-step-by-step)). Examples:
+   - rendering (`blender-render-v1`), where GPU and CPU renders differ slightly;
+   - embeddings or other numeric outputs compared with a tolerance.
+4. **None of these?** Then no mode fits yet; see [section 6](#6-when-no-mode-fits). Examples:
    - bandwidth, storage or live services;
-   - sampled text generation;
-   - outputs too large to enumerate (embeddings, rendered frames).
+   - sampled text generation, where honest outputs differ completely.
 
 Rule of thumb: **checked is always simpler and cheaper.** It needs no verifiers, no secrets and no 2× deposit. Use it whenever a checker exists.
 
@@ -36,14 +41,14 @@ Rule of thumb: **checked is always simpler and cheaper.** It needs no verifiers,
 | Mode | Files |
 |---|---|
 | checked | `degpu/tasks/<task>/__init__.py` (empty), `degpu/tasks/<task>/task.py`, `contracts/src/checkers/<Name>Checker.sol`, `tests/test_<task>.py` (a golden vector) |
-| replicated | `degpu/tasks/<task>/__init__.py` (empty), `degpu/tasks/<task>/task.py`, optionally more modules in the same folder (for example `runner.py`) |
+| replicated (exact or similar) | `degpu/tasks/<task>/__init__.py` (empty), `degpu/tasks/<task>/task.py`, optionally more modules in the same folder (for example `runner.py`, or `render.py` and `similarity.py`) |
 
 Name the folder in snake_case (`key_search_v1`) and the task in kebab-case (`key-search-v1`). The name is what goes on-chain and what `client post` takes. For an incompatible change, bump the suffix and add a new folder.
 
 Working examples to copy:
-- checked: `degpu/tasks/nonce_search_v1/` with `contracts/src/checkers/NonceChecker.sol` (mining);
 - checked: `degpu/tasks/key_search_v1/` with `contracts/src/checkers/KeySearchChecker.sol` (find a key hidden in a range). It was added by following this guide step by step, and it touched exactly the four files listed above for checked tasks;
-- replicated: `degpu/tasks/image_classify_v1/`.
+- replicated, exact: `degpu/tasks/image_classify_v1/`;
+- replicated, similar: `degpu/tasks/blender_render_v1/` (and the test-only `tests/fake_render/`, which needs no Blender).
 
 ## 3. A checked task, step by step
 
@@ -139,8 +144,8 @@ TASK = MyPuzzle()
 Things to get right:
 - **`solve` must never return an answer `check` rejects.** A wrong answer makes the whole submission revert, so the provider wouldn't be paid for any item.
 - **Returning None ("not found")** is allowed and is never slashed; the provider just isn't paid for that item.
-- **Give `solve` a budget**, as `NonceSearch.max_tries` does, so an unsolvable item can't hang the agent.
-- **Make `check` fast in Python.** Build preimages by hand (static `abi.encode` fields are 32-byte words, concatenated), as `nonce_search_v1` does.
+- **Give `solve` a budget**, as `KeySearch.max_tries` does, so an unsolvable item can't hang the agent.
+- **Make `check` fast in Python.** Build preimages by hand (static `abi.encode` fields are 32-byte words, concatenated), as `key_search_v1` does.
 - **`wrong_answer` (used by the demo's `cheat` behaviour)** defaults to random 32-byte answers until it finds one `check` rejects. Override it if random answers usually pass.
 
 ### 3.4 Golden vector
@@ -209,6 +214,58 @@ Determinism rules. **Breaking one gets honest providers slashed for disagreeing.
 
 The **runner hash** covers every `.py` file in your folder. On-chain it is registered as the task type's `runnerHash`, and an agent whose copy differs refuses the job. So any edit, even whitespace, needs a fresh deployment. Restarting `python -m degpu.chain` deploys a fresh chain.
 
+## 4b. A similar task, step by step
+
+A similar task is a replicated task whose results are **files** that honest providers produce only approximately alike. Subclass `SimilarTask`:
+
+```python
+"""Task type ``my-render-v1``: <one line>.
+
+Mode: replicated, compared by similarity. Shared blob: <the scene>. Items: <frame numbers>.
+Output: <one PNG per item>; similar if <your rule>.
+"""
+
+from degpu.tasks.base import ETHER, ReplicatedInputs, SimilarTask
+from degpu.tasks.my_render_v1 import similarity
+
+
+class MyRender(SimilarTask):
+    name = "my-render-v1"
+    description = "one line"
+    default_price = ETHER // 1000
+    seconds_per_item = 30
+    output_suffix = ".png"                 # for `client results --out DIR`
+
+    def available(self) -> bool:           # False if this machine lacks the software
+        ...
+    def prepare(self, args) -> ReplicatedInputs: ...
+    def example_inputs(self): ...          # None if unavailable here (the tests then skip)
+    def load(self, shared): ...            # once per job
+    def run(self, state, items):           # one output file (bytes) per item
+        ...
+    def similar(self, a: bytes, b: bytes) -> bool:
+        return similarity.similar(a, b)
+    def wrong_output(self, output, rng):   # demo `cheat`: a plausible but wrong output
+        ...
+
+
+TASK = MyRender()
+```
+
+What the platform does with your task:
+- **Uploads:** the main provider and each verifier upload their output files, encrypted for the client, to the store. Each leaf pins `keccak256(file)`.
+- **The client's review:** after `publishResults` the job is in the **Disputing** phase. The client's software loads the main provider's files and each verifier's files, and calls `similar` on every pair. It then calls `dispute` (with a bond) for the items that differ or whose file is missing; otherwise it calls `acceptResults`.
+- **Judgement:** a random tie-breaker re-runs the disputed items and compares its own outputs with both sides' files, again through `similar`. It submits one verdict per item, and the contract outvotes whichever side disagrees.
+
+Rules for `similar`. **It is the judge, and it must give the same answer everywhere:**
+- **Deterministic:** integer arithmetic, no randomness and no clocks. Floats are fine only if the comparison can't flip, so prefer integers (see `blender_render_v1/similarity.py`).
+- **Reflexive and symmetric,** and **false for anything it can't decode.**
+- **Local, not global.** A whole-image average hides a wrong region, so the Blender rule tests every tile of an 8×8 grid.
+- **Calibrated.** If it is too strict, honest GPU and CPU renders get disputed; if it is too loose, a cheap low-quality render passes. Measure honest re-runs against cheats (see `scripts/calibrate_render.py`) and pick a threshold inside the gap.
+- **Pinned.** Put the rule in your task folder, so the runner hash pins it together with the rest of the code.
+
+Your runner may vary across devices, which is the point of a similar task, but keep everything else fixed: seeds, sample counts, output format and metadata. The more alike honest outputs are, the tighter the threshold can be, and the harder it is to cheat with a cheaper computation.
+
 ## 5. Try it
 
 ```bash
@@ -226,13 +283,15 @@ Run each command in its own terminal. Agents offer every installed task by defau
 | Mode | Checks |
 |---|---|
 | every task | metadata is complete; the CLI flags parse alongside `--main`, `--wait` and `--verify` |
-| replicated | `run` is deterministic and independent of the batch; words are 32 bytes and in `candidates()`; leaves decode back; `wrong_output` and `random_output` stay in `candidates()`; every `.py` file is covered by the runner hash |
+| replicated, exact | `run` is deterministic and independent of the batch; words are 32 bytes and in `candidates()`; leaves decode back; `wrong_output` and `random_output` stay in `candidates()`; every `.py` file is covered by the runner hash |
+| replicated, similar | `similar` accepts an output and itself, two independent honest runs, and a batched vs a single run; it is symmetric; it rejects `wrong_output`, `random_output` and garbage; every `.py` file is covered by the runner hash |
 | checked | every solved answer passes `check`; `wrong_answer` fails it; the deployed checker contract agrees with `check` |
 
 **Pitfalls:**
 - **`contracts/script/Deploy.s.sol` registers only the built-in tasks.** `Chain.deploy` (used by `python -m degpu.chain`, the demo and the tests) registers every installed task.
 - **Price and timing are only defaults.** `default_price` is what agents offer unless told otherwise. `seconds_per_item` is fixed at registration and is added to each work deadline: compute, checking, tie-break, or the checked mode's work window.
 - **The task registry is cached per process,** so restart long-running agents and clients after adding a task.
+- **Software the task needs** (Blender, a GPU driver...): make `available()` return False without it. Agents then don't offer the task, and are never drawn to verify it.
 
 ## 6. When no mode fits
 

@@ -73,7 +73,7 @@ contract EncodingTest is DeGPUBase {
         market.commitCheck(id, CHECK_COMMIT);
         _commitV(id, 1, l);
         vm.prank(vs[0]);
-        market.revealCheck(id, _twoLeaves(), S33);
+        market.revealCheck(id, _twoLeaves(), S33, "");
         _revealV(id, 1, l);
         _publish(id, l);
         _assertClosed(id, ReplicatedMarket.Outcome.Verified);

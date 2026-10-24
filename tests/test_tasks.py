@@ -1,9 +1,11 @@
 """Conformance tests that every installed task must pass (docs/ADDING_A_JOB_TYPE.md).
 
 They run once per task found by ``degpu.tasks.all_tasks()``, so a new task folder is tested
-automatically. Replicated tasks are checked for determinism, batch independence, word format,
-decoding and the runner hash; checked tasks for solve/check consistency and, on a local anvil,
-for agreement between the Python ``check`` and the Solidity checker contract.
+automatically (plus the test-only similar task in tests/fake_render/). Exact replicated tasks
+are checked for determinism, batch independence, word format and decoding; similar tasks for a
+sane ``similar`` (reflexive, symmetric, tolerant of honest re-runs, rejecting wrong and garbage
+outputs); both for the runner hash; checked tasks for solve/check consistency and, on a local
+anvil, for agreement between the Python ``check`` and the Solidity checker contract.
 """
 
 import argparse
@@ -13,10 +15,13 @@ import shutil
 import pytest
 
 from degpu import crypto
-from degpu.tasks import CheckedTask, ReplicatedTask, all_tasks, get
+from conftest import load_fake_render
+from degpu.tasks import CheckedTask, ReplicatedTask, SimilarTask, all_tasks, get
 
 TASKS = list(all_tasks().values())
-REPLICATED = [t for t in TASKS if isinstance(t, ReplicatedTask)]
+REPLICATED = [t for t in TASKS if isinstance(t, ReplicatedTask) and t.compare == "exact"]
+SIMILAR = [t for t in TASKS if isinstance(t, SimilarTask)] + [load_fake_render()]
+PINNED = REPLICATED + SIMILAR  # every replicated task, whichever comparison
 CHECKED = [t for t in TASKS if isinstance(t, CheckedTask)]
 
 
@@ -36,8 +41,8 @@ def example(task):
 # ---------------------------------------------------------------------------
 
 def test_registry_finds_the_built_in_tasks():
-    assert {"image-classify-v1", "nonce-search-v1"} <= set(all_tasks())
-    assert get("nonce-search-v1").mode == "checked"
+    assert {"image-classify-v1", "key-search-v1"} <= set(all_tasks())
+    assert get("key-search-v1").mode == "checked"
     with pytest.raises(KeyError, match="no task"):
         get("no-such-task")
 
@@ -108,7 +113,7 @@ def test_replicated_demo_outputs(task):
     assert task.random_output(rng) in candidates
 
 
-@pytest.mark.parametrize("task", REPLICATED, ids=ids(REPLICATED))
+@pytest.mark.parametrize("task", PINNED, ids=ids(PINNED))
 def test_runner_hash_pins_the_whole_folder(task, tmp_path):
     h = task.runner_hash()
     assert len(h) == 32 and task.runner_hash() == h
@@ -124,6 +129,40 @@ def test_runner_hash_pins_the_whole_folder(task, tmp_path):
         assert clone.runner_hash() != h, f"{py.name} is not covered by the runner hash"
         py.write_bytes(original)
     assert clone.runner_hash() == h
+
+
+# ---------------------------------------------------------------------------
+# Similar tasks
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("task", SIMILAR, ids=ids(SIMILAR))
+def test_similar_outputs_and_metric(task):
+    inputs = example(task)
+    state = task.load(inputs.shared)
+    first = task.run(state, inputs.items)
+    second = task.run(task.load(inputs.shared), inputs.items)  # an independent honest run
+    assert len(first) == len(second) == len(inputs.items)
+    assert all(isinstance(out, bytes) and out for out in first)
+    rng = random.Random(5)
+    for a, b in zip(first, second):
+        assert task.similar(a, a), "similar() must accept an output compared with itself"
+        assert task.similar(a, b), "two honest runs must be similar"
+        assert task.similar(b, a) == task.similar(a, b), "similar() must be symmetric"
+        wrong = task.wrong_output(a, rng)
+        assert not task.similar(a, wrong) and not task.similar(b, wrong), "wrong_output() must be dissimilar"
+        assert not task.similar(a, task.random_output(rng)), "random_output() must be dissimilar"
+        assert not task.similar(a, b"") and not task.similar(b"not an output", a), "garbage must be dissimilar"
+    task.present(first[0])
+    task.present(None)
+
+
+@pytest.mark.parametrize("task", SIMILAR, ids=ids(SIMILAR))
+def test_similar_outputs_are_independent_of_the_batch(task):
+    inputs = example(task)
+    state = task.load(inputs.shared)
+    together = task.run(state, inputs.items)
+    alone = [task.run(state, [item])[0] for item in inputs.items]
+    assert all(task.similar(a, b) for a, b in zip(together, alone))
 
 
 # ---------------------------------------------------------------------------

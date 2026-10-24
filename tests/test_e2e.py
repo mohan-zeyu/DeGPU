@@ -21,6 +21,7 @@ from degpu.chain import (
     CheckedStat,
     CheckedStatus,
     Drop,
+    VState,
     Outcome,
     Status,
     start_local_chain,
@@ -33,7 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 MODEL = REPO / "assets" / "mobilenetv2.onnx"
 IMAGES = sorted((REPO / "assets" / "images").glob("*.jpg"))[::10]
 IMAGE_TASK = get("image-classify-v1")
-NONCE_TASK = get("nonce-search-v1")
+KEY_TASK = get("key-search-v1")
 
 pytestmark = pytest.mark.skipif(shutil.which("anvil") is None, reason="anvil (Foundry) not installed")
 needs_assets = pytest.mark.skipif(not MODEL.exists() or len(IMAGES) < 20,
@@ -79,7 +80,7 @@ class World:
 
 
 @pytest.fixture(scope="module")
-def world(tmp_path_factory):
+def world(tmp_path_factory, fake_render):  # the fake render task is deployed and offered too
     anvil, chain = start_local_chain()
     try:
         store = Store(tmp_path_factory.mktemp("store"))
@@ -214,22 +215,23 @@ def test_client_never_reveals_counts_as_unverified(world, local_labels):
 # Checked mode
 # ---------------------------------------------------------------------------
 
-def test_mining_paid_per_solved_puzzle(world):
-    """5 solvable puzzles and 1 impossible one: D is paid for 5, the client gets 1 refunded."""
+def test_key_search_paid_per_solved_puzzle(world):
+    """5 solvable puzzles and 1 whose key lies outside its range: D is paid for 5, the client
+    gets 1 refunded."""
     world.honest()
     d_agent = world.agents["D"]
     before = world.snapshot()
-    items = NONCE_TASK.items(5, difficulty=10, impossible=1)
-    ref = world.client.post(NONCE_TASK, d_agent.account, items)
+    items = KEY_TASK.items(5, bits=10, impossible=1)
+    ref = world.client.post(KEY_TASK, d_agent.account, items)
     job = world.drive(ref)
 
     assert job.outcome == CheckedOutcome.DELIVERED
     assert job.solved == 5
-    nonces = world.client.results(ref)
-    assert nonces[-1] is None
-    for item, nonce in zip(items[:5], nonces[:5]):
-        assert NONCE_TASK.check(item, nonce.to_bytes(32, "big"))
-    ppi = NONCE_TASK.default_price
+    keys = world.client.results(ref)
+    assert keys[-1] is None
+    for item, key in zip(items[:5], keys[:5]):
+        assert KEY_TASK.check(item, key.to_bytes(32, "big"))
+    ppi = KEY_TASK.default_price
     d = world.deltas(before)
     assert d[world.client.account] == (-5 * ppi, 0)
     assert d[d_agent.account] == (5 * ppi, 0)
@@ -237,13 +239,13 @@ def test_mining_paid_per_solved_puzzle(world):
     assert world.markets_empty()
 
 
-def test_mining_wrong_answers_rejected_then_slashed(world):
-    """F submits made-up nonces: the checker rejects the submission on-chain, F misses its
+def test_key_search_wrong_answers_rejected_then_slashed(world):
+    """F submits made-up keys: the checker rejects the submission on-chain, F misses its
     deadline and expire() slashes it; the client is refunded in full plus the slash."""
     world.honest(F="cheat")
     f = world.agents["F"]
     before = world.snapshot()
-    ref = world.client.post(NONCE_TASK, f.account, NONCE_TASK.items(3, difficulty=8))
+    ref = world.client.post(KEY_TASK, f.account, KEY_TASK.items(3, bits=8))
     job = world.drive(ref)
     assert job.status == CheckedStatus.WORKING
     assert "invalid answer" in f.jobs["checked"][ref.id]["rejected"]
@@ -262,7 +264,7 @@ def test_mining_wrong_answers_rejected_then_slashed(world):
 
 
 def test_agent_only_takes_offered_tasks(world):
-    """An agent started with --tasks image-classify-v1 never offers the mining task, so a
+    """An agent started with --tasks image-classify-v1 never offers the key-search task, so a
     client can't post one to it."""
     from degpu.chain import TxFailed
 
@@ -270,11 +272,175 @@ def test_agent_only_takes_offered_tasks(world):
     picky = ProviderAgent(world.chain, a.account, name="A2", store=a.store, keypair=(a.priv, a.pub),
                           log=lambda m: None, tasks=["image-classify-v1"])
     assert list(picky.tasks) == ["image-classify-v1"]
-    tid = world.chain.task_id(NONCE_TASK.name)
+    tid = world.chain.task_id(KEY_TASK.name)
     reg = world.chain.registry.functions
     world.chain.send(reg.setPrice(world.chain.markets["checked"].address, tid, 0), a.account)
     try:
         with pytest.raises(TxFailed, match="main does not offer task"):
-            world.client.post(NONCE_TASK, a.account, NONCE_TASK.items(1, difficulty=4))
+            world.client.post(KEY_TASK, a.account, KEY_TASK.items(1, bits=4))
     finally:
         a.register()  # offers every task again
+
+
+# ---------------------------------------------------------------------------
+# Replicated mode, similar comparison (the test-only fake render task)
+# ---------------------------------------------------------------------------
+
+FRAMES = 8
+
+
+def render_job(world, fake_render, main, verify):
+    return world.client.post(fake_render, main, fake_render.inputs(FRAMES), verify=verify)
+
+
+def step_until(world, ref, status, rounds=20):
+    """Step everyone until the job reaches ``status`` (before the client acts on it)."""
+    for _ in range(rounds):
+        if world.chain.job(ref.mode, ref.id).status == status:
+            return
+        world.client.step()
+        if world.chain.job(ref.mode, ref.id).status == status:
+            return
+        for ag in world.agents.values():
+            ag.step()
+    raise AssertionError(f"job never reached {Status(status).name}")
+
+
+def test_render_verified_honest_accepted(world, fake_render):
+    """Honest renders differ bit-wise but are similar: the client accepts without a dispute."""
+    world.honest()
+    a = world.agents["A"]
+    before = world.snapshot()
+    ref = render_job(world, fake_render, a.account, verify=True)
+    job = world.drive(ref)
+
+    assert job.outcome == Outcome.VERIFIED
+    review = world.client.jobs["replicated"][ref.id]["review"]
+    assert review == {"compared": FRAMES, "disputed": []}
+    frames = world.client.results(ref)
+    local = fake_render.run(fake_render.load(b"scene-7"), fake_render.inputs(FRAMES).items)
+    assert all(fake_render.similar(x, y) for x, y in zip(frames, local))
+    assert any(x != y for x, y in zip(frames, local))  # similar, not identical
+    price = FRAMES * fake_render.default_price
+    d = world.deltas(before)
+    assert d[world.client.account] == (-2 * price, 0)
+    assert d[a.account] == (price, 0)
+    for v in job.verifiers:
+        assert d[v] == (price // 2, 0)
+    assert world.markets_empty()
+
+
+def test_render_cheat_disputed_main_slashed(world, fake_render):
+    """M degrades some frames: the client disputes exactly those, T confirms, M is slashed."""
+    world.honest(B="cheat")
+    b = world.agents["B"]
+    before = world.snapshot()
+    ref = render_job(world, fake_render, b.account, verify=True)
+    job = world.drive(ref)
+
+    faked = b.jobs["replicated"][ref.id]["cheated"]
+    assert faked and world.client.jobs["replicated"][ref.id]["review"]["disputed"] == faked
+    assert job.outcome == Outcome.MAIN_OUTVOTED
+    assert [int(i) for i in job.mismatched] == faked
+    slash = before[b.account][1] * 3000 // 10000
+    price = FRAMES * fake_render.default_price
+    tf = 2 * ETHER // 1000
+    d = world.deltas(before)
+    assert d[b.account] == (0, -slash)
+    for v in job.verifiers:
+        assert d[v] == (price // 2, 0)
+    assert d[job.tiebreaker] == (tf, 0)
+    assert d[world.client.account] == (slash - price - tf, 0)  # the dispute bond came back
+    assert world.markets_empty()
+    world.chain.send(world.chain.registry.functions.addStake(), b.account, value=slash)  # back to 1 ETH
+    world.honest()
+
+
+def test_render_lying_verifiers_slashed(world, fake_render):
+    """Both verifiers upload garbage: every frame is disputed and T outvotes them."""
+    world.honest()
+    for name in ("B", "C", "D", "E", "F"):
+        world.agents[name].behavior = "liar"
+    a = world.agents["A"]
+    before = world.snapshot()
+    ref = render_job(world, fake_render, a.account, verify=True)
+    job = world.drive(ref)
+
+    assert job.outcome == Outcome.VERIFIER_OUTVOTED
+    assert len(job.mismatched) == FRAMES
+    assert all(VState(s) == VState.OUTVOTED for s in job.vstate)
+    d = world.deltas(before)
+    assert d[a.account] == (FRAMES * fake_render.default_price, 0)
+    for v in job.verifiers:
+        slash = before[v][1] * 3000 // 10000  # 30% of its stake at the time
+        assert d[v] == (0, -slash)
+        world.chain.send(world.chain.registry.functions.addStake(), v, value=slash)
+    assert world.markets_empty()
+    world.honest()
+
+
+def test_render_unverified_missing_files_disputed(world, fake_render):
+    """An unverified job whose main provider never really uploads its frames: the client sees
+    they are missing, disputes them, and T (judging M alone) outvotes M."""
+    world.honest()
+    c = world.agents["C"]
+    before = world.snapshot()
+    ref = render_job(world, fake_render, c.account, verify=False)
+    step_until(world, ref, Status.DISPUTING)
+    # sabotage: delete C's uploaded frames from the store before the client reviews them
+    manifest = world.client.store.get(c.jobs["replicated"][ref.id]["results_uri"])
+    for uri in __import__("json").loads(manifest)["items"].values():
+        (world.client.store.root / uri.removeprefix("store:")).unlink()
+    job = world.drive(ref)
+
+    assert world.client.jobs["replicated"][ref.id]["review"]["disputed"] == list(range(FRAMES))
+    assert job.outcome == Outcome.MAIN_OUTVOTED
+    slash = before[c.account][1] * 3000 // 10000
+    d = world.deltas(before)
+    assert d[c.account] == (0, -slash)
+    assert world.markets_empty()
+    world.chain.send(world.chain.registry.functions.addStake(), c.account, value=slash)
+
+
+def test_render_unfounded_dispute_rejected(world, fake_render):
+    """The client disputes frames that are fine: T finds both sides similar, nobody is slashed,
+    and the client's bond pays the tie-breaker."""
+    world.honest()
+    a = world.agents["A"]
+    before = world.snapshot()
+    ref = render_job(world, fake_render, a.account, verify=True)
+    step_until(world, ref, Status.DISPUTING)
+    st = world.client.jobs["replicated"][ref.id]
+    st["review"] = {"compared": 0, "disputed": [1, 6]}  # skip the driver's own review
+    market = world.chain.markets["replicated"]
+    world.chain.send(market.functions.dispute(ref.id, [1, 6]), world.client.account,
+                     value=market.functions.params().call().tiebreakFee)
+    job = world.drive(ref)
+
+    assert job.outcome == Outcome.DISPUTE_REJECTED
+    price = FRAMES * fake_render.default_price
+    tf = 2 * ETHER // 1000
+    d = world.deltas(before)
+    assert d[world.client.account] == (-2 * price - tf, 0)
+    assert d[a.account] == (price, 0)
+    assert d[job.tiebreaker] == (tf, 0)
+    assert all(dstake == 0 for _, dstake in d.values())
+    assert world.markets_empty()
+
+
+BLENDER = get("blender-render-v1")
+
+
+@pytest.mark.skipif(not BLENDER.available(), reason="Blender (the pinned version) is not installed")
+def test_blender_render_verified(world, tmp_path):
+    """A real Blender job: two frames of the demo scene, verified, accepted without a dispute."""
+    from degpu.tasks.blender_render_v1.task import DEMO_SCENE
+
+    if not DEMO_SCENE.exists():
+        pytest.skip("demo scene missing: run scripts/calibrate_render.py or scripts/demo.py once")
+    world.honest()
+    ref = world.client.post(BLENDER, world.agents["A"].account, BLENDER.inputs(DEMO_SCENE, [1, 6]), verify=True)
+    job = world.drive(ref, rounds=40)
+    assert job.outcome == Outcome.VERIFIED
+    frames = world.client.results(ref)
+    assert all(f and f.startswith(b"\x89PNG") for f in frames)

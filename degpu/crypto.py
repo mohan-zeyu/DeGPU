@@ -30,6 +30,8 @@ __all__ = [
     "job_salt",
     "shared_key",
     "item_key",
+    "result_key",
+    "check_result_key",
     "word",
     "leaf",
     "decode_leaves",
@@ -84,8 +86,18 @@ def shared_key(k_job: bytes) -> bytes:
 
 
 def item_key(k_job: bytes, i: int) -> bytes:
-    """SecretBox key for encrypted image ``i``."""
+    """SecretBox key for encrypted item ``i``."""
     return hkdf32(k_job, b"degpu/item/%d" % i)
+
+
+def result_key(k_job: bytes, i: int) -> bytes:
+    """SecretBox key for the main provider's result file of item ``i`` (similar tasks)."""
+    return hkdf32(k_job, b"degpu/result/%d" % i)
+
+
+def check_result_key(k_job: bytes, slot: int, i: int) -> bytes:
+    """SecretBox key for verifier ``slot``'s result file of item ``i`` (similar tasks)."""
+    return hkdf32(k_job, b"degpu/check-result/%d/%d" % (slot, i))
 
 
 # ---------------------------------------------------------------------------

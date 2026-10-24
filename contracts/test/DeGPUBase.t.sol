@@ -60,6 +60,7 @@ abstract contract DeGPUBase is Test {
             checkWindow: 600,
             revealWindow: 300,
             publishWindow: 300,
+            disputeWindow: 300,
             tiebreakWindow: 600,
             tiebreakFee: 0.002 ether,
             wrongSlashBps: 3000,
@@ -102,7 +103,7 @@ abstract contract DeGPUBase is Test {
         registry = new ProviderRegistry(MIN_STAKE);
         market = new ReplicatedMarket(address(registry), p);
         registry.addMarket(address(market));
-        market.addTaskType(RUNNER_HASH, "image-classify-v1", 0);
+        market.addTaskType(RUNNER_HASH, "image-classify-v1", 0, ReplicatedMarket.Compare.Exact);
     }
 
     /// Register every provider with 1 ETH and offer task type TASK at PPI.
@@ -223,12 +224,12 @@ abstract contract DeGPUBase is Test {
     function _revealV(uint256 id, uint256 slot, bytes32[] memory vLeaves) internal {
         (uint256 s, uint256 e) = market.rangeOf(id, slot);
         vm.prank(_verifiers(id)[slot]);
-        market.revealCheck(id, _slice(vLeaves, s, e), V_SALT);
+        market.revealCheck(id, _slice(vLeaves, s, e), V_SALT, "");
     }
 
     function _publish(uint256 id, bytes32[] memory leaves) internal {
         vm.prank(_job(id).main);
-        market.publishResults(id, leaves);
+        market.publishResults(id, leaves, "");
     }
 
     function _shareTie(uint256 id) internal {
@@ -342,7 +343,7 @@ abstract contract DeGPUBase is Test {
             if (logs[i].topics[0] == PAYOUT_SIG) paid += abi.decode(logs[i].data, (uint256));
             if (logs[i].topics[0] == SLASHED_SIG) slashed += abi.decode(logs[i].data, (uint256));
         }
-        assertEq(paid, 2 * j.price + slashed, "payout events");
+        assertEq(paid, 2 * j.price + j.disputeBond + slashed, "payout events");
     }
 
     /// Make every provider except the given ones inactive by withdrawing below minStake.

@@ -23,13 +23,13 @@ contract GasTest is DeGPUBase {
         bytes32[] memory r0 = _slice(l, 0, 100);
         vm.prank(v0);
         uint256 g = gasleft();
-        market.revealCheck(id, r0, V_SALT);
+        market.revealCheck(id, r0, V_SALT, "");
         uint256 revealGas = g - gasleft();
         _revealV(id, 1, l);
 
         vm.prank(A);
         g = gasleft();
-        market.publishResults(id, l);
+        market.publishResults(id, l, "");
         uint256 publishGas = g - gasleft();
 
         console.log("revealCheck (100 leaves) gas:", revealGas);
@@ -45,7 +45,7 @@ contract GasTest is DeGPUBase {
         uint256 id = _toPublishingUnverified(A, l);
         vm.prank(A);
         uint256 g = gasleft();
-        market.publishResults(id, l);
+        market.publishResults(id, l, "");
         uint256 publishGas = g - gasleft();
         console.log("publishResults (200 leaves, Delivered, settles) gas:", publishGas);
         assertEq(address(market).balance, 0);
@@ -59,7 +59,7 @@ contract GasTest is DeGPUBase {
         uint256 id = _toPublishingVerified(A, m, l, l);
         vm.prank(A);
         uint256 g = gasleft();
-        market.publishResults(id, m);
+        market.publishResults(id, m, "");
         uint256 publishGas = g - gasleft();
         console.log("publishResults (200 leaves, 1 mismatch, starts tie-break) gas:", publishGas);
         assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.TieBreak));

@@ -28,7 +28,8 @@ contract DeployTest is Test {
         assertEq(market.mode(), "replicated");
         assertEq(checked.mode(), "checked");
 
-        (bytes32 h, string memory name, uint64 spi) = market.taskTypeOf(1);
+        (bytes32 h, string memory name, uint64 spi, ReplicatedMarket.Compare c) = market.taskTypeOf(1);
+        assertEq(uint8(c), uint8(ReplicatedMarket.Compare.Exact));
         assertEq(h, runnerHash);
         assertEq(name, "image-classify-v1");
         assertEq(spi, 1);
@@ -37,14 +38,13 @@ contract DeployTest is Test {
 
         address checker;
         (checker, name, spi) = checked.taskTypeOf(1);
-        assertEq(name, "nonce-search-v1");
+        assertEq(name, "key-search-v1");
         assertEq(spi, 2);
         assertEq(checked.taskTypeCount(), 1);
-        // the registered checker is a NonceChecker: target 2^256-1 accepts any nonce, target 0 none
-        bytes memory easy = abi.encode(bytes32(uint256(1)), type(uint256).max);
-        bytes memory impossible = abi.encode(bytes32(uint256(1)), uint256(0));
-        assertTrue(IChecker(checker).check(easy, bytes32(uint256(5))));
-        assertFalse(IChecker(checker).check(impossible, bytes32(uint256(5))));
+        // the registered checker is a KeySearchChecker: it finds 42 in [0, 100) from its hash
+        bytes memory item = abi.encode(keccak256(abi.encode(uint256(42))), uint256(0), uint256(100));
+        assertTrue(IChecker(checker).check(item, bytes32(uint256(42))));
+        assertFalse(IChecker(checker).check(item, bytes32(uint256(41))));
 
         ReplicatedMarket.Params memory p = market.params();
         assertEq(p.acceptWindow, 300);
@@ -53,6 +53,7 @@ contract DeployTest is Test {
         assertEq(p.checkWindow, 600);
         assertEq(p.revealWindow, 300);
         assertEq(p.publishWindow, 300);
+        assertEq(p.disputeWindow, 300);
         assertEq(p.tiebreakWindow, 600);
         assertEq(p.tiebreakFee, 0.002 ether);
         assertEq(p.wrongSlashBps, 3000);

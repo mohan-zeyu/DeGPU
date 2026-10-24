@@ -11,9 +11,9 @@ import importlib
 import pkgutil
 from pathlib import Path
 
-from degpu.tasks.base import CheckedTask, ReplicatedTask, Task
+from degpu.tasks.base import CheckedTask, ReplicatedTask, SimilarTask, Task
 
-__all__ = ["Task", "ReplicatedTask", "CheckedTask", "all_tasks", "get"]
+__all__ = ["Task", "ReplicatedTask", "SimilarTask", "CheckedTask", "all_tasks", "get"]
 
 _TASKS: dict[str, Task] | None = None
 

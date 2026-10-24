@@ -8,3 +8,4 @@ contracts/broadcast/
 .degpu-store/
 .degpu-state/
 assets/
+results/

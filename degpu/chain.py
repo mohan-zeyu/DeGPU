@@ -62,6 +62,7 @@ DEMO_PARAMS = (
     600,  # checkWindow (+ secondsPerItem x range size)
     300,  # revealWindow
     300,  # publishWindow
+    300,  # disputeWindow (similar tasks: the client reviews the results)
     600,  # tiebreakWindow (+ secondsPerItem x mismatched items)
     2 * ETHER // 1000,  # tiebreakFee 0.002 ETH
     3000,  # wrongSlashBps
@@ -104,8 +105,9 @@ class Status(IntEnum):
     CHECKING = 4
     CHECK_REVEAL = 5
     PUBLISHING = 6
-    TIE_BREAK = 7
-    CLOSED = 8
+    DISPUTING = 7
+    TIE_BREAK = 8
+    CLOSED = 9
 
 
 class Outcome(IntEnum):
@@ -120,6 +122,12 @@ class Outcome(IntEnum):
     MAIN_MISSED = 8
     TIEBREAKER_MISSED = 9
     TIE_CLIENT_NO_SHARE = 10
+    DISPUTE_REJECTED = 11
+
+
+class Compare(IntEnum):
+    EXACT = 0
+    SIMILAR = 1
 
 
 class Drop(IntEnum):
@@ -355,7 +363,8 @@ class Chain:
         owner = owner or self.accounts[DEPLOYER_INDEX]
         market = self.markets[task.mode]
         if task.mode == "replicated":
-            fn = market.functions.addTaskType(task.runner_hash(), task.name, task.seconds_per_item)
+            compare = Compare.SIMILAR if task.compare == "similar" else Compare.EXACT
+            fn = market.functions.addTaskType(task.runner_hash(), task.name, task.seconds_per_item, int(compare))
         elif task.mode == "checked":
             abi, bytecode = load_artifact(task.checker_contract)
             checker = self._deploy_contract(abi, bytecode, [], owner)
@@ -435,7 +444,8 @@ class Chain:
         return start, end
 
     def task_type(self, mode: str, task_id: int):
-        """taskTypeOf(id) of the ``mode`` market: (runnerHash | checker, name, secondsPerItem)."""
+        """taskTypeOf(id) of the ``mode`` market: (runnerHash, name, secondsPerItem, compare) for
+        the replicated market, (checker, name, secondsPerItem) for the checked one."""
         return self.markets[mode].functions.taskTypeOf(task_id).call()
 
     def task_id(self, name: str) -> int | None:

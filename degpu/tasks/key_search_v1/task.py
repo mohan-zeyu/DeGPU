@@ -40,21 +40,23 @@ class KeySearch(CheckedTask):
     def add_cli_args(self, parser):
         parser.add_argument("--keys", type=int, default=10, help="number of hidden keys")
         parser.add_argument("--bits", type=int, default=16, help="each key hides among 2^bits values (default 16)")
+        parser.add_argument("--impossible", type=int, default=0,
+                            help="also add N puzzles whose key lies outside the range (to see the refund)")
 
     def prepare(self, args) -> list[bytes]:
-        return self.items(args.keys, args.bits)
+        return self.items(args.keys, args.bits, args.impossible)
 
     def example_inputs(self) -> list[bytes]:
         # three solvable puzzles, and one whose key lies outside its range
-        lo = 1000
-        return self.items(3, bits=8) + [self.item(_key_hash(lo - 1), lo, lo + 256)]
+        return self.items(3, bits=8, impossible=1)
 
-    def items(self, n: int, bits: int = 16) -> list[bytes]:
-        """``n`` puzzles, each hiding a random key in a random range of ``2**bits`` values."""
+    def items(self, n: int, bits: int = 16, impossible: int = 0) -> list[bytes]:
+        """``n`` puzzles, each hiding a random key in a random range of ``2**bits`` values, then
+        ``impossible`` puzzles whose key is just below their range (no solution)."""
         out = []
-        for _ in range(n):
-            lo = int.from_bytes(os.urandom(16), "big")
-            key = lo + secrets.randbelow(2**bits)
+        for k in range(n + impossible):
+            lo = int.from_bytes(os.urandom(16), "big") + 1
+            key = lo + secrets.randbelow(2**bits) if k < n else lo - 1
             out.append(self.item(_key_hash(key), lo, lo + 2**bits))
         return out
 

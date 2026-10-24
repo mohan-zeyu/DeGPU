@@ -5,10 +5,16 @@ an instance of a subclass of one of the two classes below. The class you subclas
 task's **verification mode**, i.e. which market contract runs its jobs:
 
 * ``ReplicatedTask`` -> ``ReplicatedMarket``: the platform checks work by re-running it on
-  randomly drawn providers and comparing hashes. For tasks with deterministic results per item
-  (ML inference, rendering...). Results come back as salted 32-byte words.
+  randomly drawn providers. How the results are compared is part of the task:
+
+  - ``ReplicatedTask`` itself (compare "exact"): deterministic results per item, returned as
+    salted 32-byte words that the contract compares bit for bit (ML inference...).
+  - ``SimilarTask`` (compare "similar"): results are files that honest providers produce only
+    approximately alike (renders...). The client compares them with the task's ``similar``
+    metric and disputes the items that differ; a random tie-breaker re-runs those and judges.
+
 * ``CheckedTask`` -> ``CheckedMarket``: a checker contract verifies each answer on-chain. For
-  puzzles that are hard to solve and cheap to check (mining, key search...).
+  puzzles that are hard to solve and cheap to check (key search, factoring...).
 
 Everything else (deployment, the provider agents, the client CLI, the demo plumbing) finds a
 task through ``degpu.tasks.all_tasks()``; nothing outside the task's folder (and, for a checked
@@ -51,6 +57,11 @@ class Task:
         """Client side: turn the parsed CLI flags into this task's job inputs."""
         raise NotImplementedError
 
+    def available(self) -> bool:
+        """Whether this machine can run the task (e.g. its software is installed). Agents only
+        offer available tasks, so they are never picked for a job they can't do."""
+        return True
+
     def example_inputs(self):
         """A few small job inputs for the conformance tests (tests/test_tasks.py), in the same form
         ``prepare`` returns; None if they aren't available (e.g. assets not downloaded)."""
@@ -87,6 +98,8 @@ class ReplicatedTask(Task):
     """
 
     mode = "replicated"
+    #: how results are compared: "exact" (32-byte words, by the contract) or "similar" (SimilarTask)
+    compare = "exact"
 
     # -- provider side (pinned) ------------------------------------------------
 
@@ -134,6 +147,59 @@ class ReplicatedTask(Task):
         return self._candidates_cache
 
 
+class SimilarTask(ReplicatedTask):
+    """A replicated task whose results are files that honest providers produce only approximately
+    alike, such as rendered frames. Implement ``load``, ``run``, ``similar`` and ``present``.
+
+    Rules (enforced by the conformance tests in tests/test_tasks.py):
+
+    * ``run`` returns one output file (bytes) per item, in order. It needn't be bit-identical
+      across machines (GPU vs CPU, other CPUs), but honest outputs must pass ``similar``.
+    * ``similar(a, b)`` is the one comparison everyone applies: the client to decide what to
+      dispute, the tie-breaker to judge. It must be deterministic (integer arithmetic, no
+      randomness), symmetric, true for a file and itself, and false for anything it can't decode.
+      It lives in the task folder, so the runner hash pins it like the rest of the code.
+    * Outputs travel encrypted through the store; the chain only holds each output's hash (in
+      its leaf), so any size works.
+    """
+
+    compare = "similar"
+    #: file name suffix used when results are written to disk (``client results --out``)
+    output_suffix = ".bin"
+
+    # -- provider side (pinned) ------------------------------------------------
+
+    def run(self, state: Any, items: list[bytes]) -> list[bytes]:
+        """Compute one output file per item, in order."""
+        raise NotImplementedError
+
+    # -- both sides (pinned) ---------------------------------------------------
+
+    def similar(self, a: bytes, b: bytes) -> bool:
+        """Whether two outputs for the same item agree well enough."""
+        raise NotImplementedError
+
+    # -- client side -------------------------------------------------------------
+
+    def candidates(self) -> Iterable[bytes]:
+        return []  # not used: results come back as files, not as words to decode
+
+    def present(self, output: bytes | None) -> Any:
+        """Turn an output file (None: missing or not matching its hash) into a user-facing value."""
+        return output
+
+    # -- demo behaviours (optional) -----------------------------------------------
+
+    def wrong_output(self, output: bytes, rng: random.Random) -> bytes:
+        """A wrong output that ``similar`` rejects, used by the ``cheat`` behaviour. The default
+        scrambles the bytes; override it with something plausible (e.g. a degraded image)."""
+        return bytes(b ^ 0xFF for b in output)
+
+    def random_output(self, rng: random.Random) -> bytes:
+        """Garbage, used by the ``liar`` behaviour."""
+        return rng.randbytes(64)
+
+
 # ---------------------------------------------------------------------------
 # Checked mode
 # ---------------------------------------------------------------------------
@@ -155,7 +221,7 @@ class CheckedTask(Task):
 
     mode = "checked"
 
-    #: name of the Solidity checker contract (its artifact in contracts/out/), e.g. "NonceChecker"
+    #: name of the Solidity checker contract (its artifact in contracts/out/), e.g. "KeySearchChecker"
     checker_contract: str = ""
 
     # -- provider side -------------------------------------------------------------

@@ -6,8 +6,20 @@ Job data (both sides):
   a random ``k_job``, upload them and a plaintext manifest, and compute ``dataHash``.
 * ``load_inputs`` (providers): fetch the manifest, check it against the on-chain ``dataHash``,
   decrypt the blobs a role needs and check each against its manifest hash.
+* ``pack_results`` / ``load_results`` (similar tasks): the main provider and each verifier upload
+  their result files encrypted; whoever reads one checks it against its on-chain leaf.
 
-Provider roles (``ReplicatedProvider``), as before but through the task's hooks:
+How results are compared depends on the task (``task.compare``), and everything that differs
+between the two lives in one comparison object (``EXACT`` / ``SIMILAR``):
+
+* **exact** (``ReplicatedTask``): outputs are 32-byte words, the leaves carry them and the contract
+  compares them; the tie-breaker submits its own leaves.
+* **similar** (``SimilarTask``): outputs are files, the leaves carry their hashes and the files
+  go through the store; in the Disputing phase the client compares M's files with each verifier's
+  using ``task.similar`` and disputes the items that differ (or are missing); the tie-breaker
+  re-runs those, compares its own outputs with both sides' files and submits a verdict per item.
+
+Provider roles (``ReplicatedProvider``):
 
 * **main**: unseal ``k_job``; check the task's runner hash and the inputs; ``accept``; run all
   N items; ``commitResults`` (always: M never knows whether the job will be verified);
@@ -15,11 +27,11 @@ Provider roles (``ReplicatedProvider``), as before but through the task's hooks:
 * **verifier**: wait for its ``RangeShared``; check its range and inputs (``reportBadInput`` on a
   mismatch); run its share of the items; ``commitCheck``; ``revealCheck`` in CheckReveal.
 * **tie-breaker**: wait for ``TiebreakShared``; check the inputs; run only the mismatched items;
-  ``submitTiebreak``.
+  submit its leaves (exact) or its verdicts (similar).
 
 Client (``ReplicatedClient``): post with a hidden verify decision and a 2 x price deposit, reveal
-the decision once M has committed, share each verifier's range and the tie items, and decode the
-published leaves with the task's ``candidates``.
+the decision once M has committed, share each verifier's range, review similar results, share
+the tie items, and read the results (decoded words, or verified files).
 """
 
 from __future__ import annotations
@@ -44,6 +56,14 @@ def _hex(b: bytes) -> str:
 
 def _unhex(s: str) -> bytes:
     return bytes.fromhex(s.removeprefix("0x"))
+
+
+def _keys_hex(keys: dict[int, bytes]) -> dict[str, str]:
+    return {str(i): _hex(k) for i, k in keys.items()}
+
+
+def _keys_bytes(keys: dict[str, str]) -> dict[int, bytes]:
+    return {int(i): _unhex(k) for i, k in keys.items()}
 
 
 class InputError(Exception):
@@ -113,6 +133,89 @@ def load_inputs(store, job, task: ReplicatedTask, shared_key: bytes,
     except (ValueError, TypeError, IndexError) as e:
         raise InputError(f"malformed manifest ({e})") from None
     return shared, blobs
+
+
+# ---------------------------------------------------------------------------
+# Result files (similar tasks)
+# ---------------------------------------------------------------------------
+
+def pack_results(store, keys: dict[int, bytes], outputs: dict[int, bytes]) -> str:
+    """Encrypt each output with its key, upload it, and upload a manifest
+    ``{"items": {"<i>": uri}}``; returns the manifest's URI (announced on-chain)."""
+    uris = {str(i): store.put(crypto.encrypt(keys[i], out)) for i, out in outputs.items()}
+    return store.put(json.dumps({"items": uris}).encode("utf-8"))
+
+
+def load_results(store, uri: str, keys: dict[int, bytes], job_salt: bytes,
+                 leaves: dict[int, bytes]) -> dict[int, bytes | None]:
+    """The result file of every item in ``keys`` from the manifest at ``uri``, or None for an item
+    whose file is missing, doesn't decrypt or doesn't match its on-chain leaf
+    ``keccak256(abi.encode(jobSalt, i, keccak256(file)))``."""
+    out: dict[int, bytes | None] = {i: None for i in keys}
+    try:
+        uris = json.loads(store.get(uri))["items"]
+    except (KeyError, ValueError, TypeError):
+        return out
+    for i, key in keys.items():
+        try:
+            data = crypto.decrypt(key, store.get(uris[str(i)]))
+        except (KeyError, TypeError, CryptoError):
+            continue
+        if crypto.leaf(job_salt, i, crypto.keccak(data)) == bytes(leaves[i]):
+            out[i] = data
+    return out
+
+
+def published_results(chain, job_id: int, from_block: int = 0) -> tuple[list[bytes], str]:
+    """M's published leaves and results URI (from ResultsPublished); ([], "") if not published."""
+    for ev in chain.events(MODE, from_block, job_id=job_id):
+        if ev["event"] == "ResultsPublished":
+            return [bytes(x) for x in ev["args"]["leaves"]], ev["args"]["resultsURI"]
+    return [], ""
+
+
+def revealed_checks(chain, job_id: int, from_block: int = 0) -> dict[int, tuple[int, list[bytes], str]]:
+    """slot -> (first item, leaves, results URI) of every verifier that revealed (CheckRevealed)."""
+    out = {}
+    for ev in chain.events(MODE, from_block, job_id=job_id):
+        if ev["event"] == "CheckRevealed":
+            slot = int(ev["args"]["slot"])
+            start, _ = chain.range_of(job_id, slot)
+            out[slot] = (start, [bytes(x) for x in ev["args"]["leaves"]], ev["args"]["resultsURI"])
+    return out
+
+
+# ---------------------------------------------------------------------------
+# The two comparisons
+# ---------------------------------------------------------------------------
+
+class ExactComparison:
+    """Outputs are 32-byte words, compared by the contract."""
+
+    @staticmethod
+    def words(task, outputs: list[bytes]) -> list[bytes]:
+        if any(len(w) != 32 for w in outputs):
+            raise ValueError(f"{task.name}: run() must return one 32-byte word per item")
+        return outputs
+
+    @staticmethod
+    def upload(store, keys: dict[int, bytes], outputs: dict[int, bytes]) -> str:
+        return ""  # the words are the results; nothing to upload
+
+
+class SimilarComparison:
+    """Outputs are files: leaves carry their hashes and the files go through the store."""
+
+    @staticmethod
+    def words(task, outputs: list[bytes]) -> list[bytes]:
+        return [crypto.keccak(out) for out in outputs]
+
+    @staticmethod
+    def upload(store, keys: dict[int, bytes], outputs: dict[int, bytes]) -> str:
+        return pack_results(store, keys, outputs)
+
+
+COMPARISONS = {"exact": ExactComparison, "similar": SimilarComparison}
 
 
 def _leaves(st: dict, indices) -> list[bytes]:
@@ -220,7 +323,7 @@ class ReplicatedProvider(ProviderDriver):
 
         if job.status == Status.PUBLISHING and not st.get("published"):
             leaves = _leaves(st, range(job.numItems))
-            self.chain.send(m.publishResults(job_id, leaves), self.agent.account)
+            self.chain.send(m.publishResults(job_id, leaves, st.get("results_uri", "")), self.agent.account)
             st["published"] = True
             self.log(job_id, f"published {len(leaves)} leaves")
             return True
@@ -233,19 +336,22 @@ class ReplicatedProvider(ProviderDriver):
             keys = {i: crypto.item_key(k_job, i) for i in range(job.numItems)}
             self._inputs[job_id] = load_inputs(self.agent.store, job, task, crypto.shared_key(k_job), keys)
         shared, items = self._inputs.pop(job_id)
-        words = self._run(task, shared, [items[i] for i in range(job.numItems)])
+        outputs = self._run(task, shared, [items[i] for i in range(job.numItems)])
         rng = self.agent.rng
         if self.agent.behavior == "cheat":
-            n_fake = round(self.agent.cheat_fraction * len(words))
-            fake = sorted(rng.sample(range(len(words)), n_fake))
+            n_fake = round(self.agent.cheat_fraction * len(outputs))
+            fake = sorted(rng.sample(range(len(outputs)), n_fake))
             for i in fake:
-                words[i] = task.wrong_output(words[i], rng)
+                outputs[i] = task.wrong_output(outputs[i], rng)
             st["cheated"] = fake
-            self.log(job_id, f"ran {len(words)} items, faked {n_fake} results")
+            self.log(job_id, f"ran {len(outputs)} items, faked {n_fake} results")
         else:
-            self.log(job_id, f"ran {len(words)} items")
+            self.log(job_id, f"ran {len(outputs)} items")
+        cmp = COMPARISONS[task.compare]
+        keys = {i: crypto.result_key(k_job, i) for i in range(len(outputs))}
+        st["results_uri"] = cmp.upload(self.agent.store, keys, dict(enumerate(outputs)))
         st["job_salt"] = _hex(crypto.job_salt(k_job))
-        st["words"] = [_hex(w) for w in words]
+        st["words"] = [_hex(w) for w in cmp.words(task, outputs)]
 
     # -- verifier ------------------------------------------------------------------
 
@@ -276,13 +382,16 @@ class ReplicatedProvider(ProviderDriver):
                 return True
 
             if self.agent.behavior == "liar":
-                words = [task.random_output(self.agent.rng) for _ in indices]
+                outputs = [task.random_output(self.agent.rng) for _ in indices]
                 self.log(job_id, f"making up {len(indices)} random results for items {start}-{end - 1}")
             else:
-                words = self._run(task, shared, [items[i] for i in indices])
+                outputs = self._run(task, shared, [items[i] for i in indices])
                 self.log(job_id, f"ran items {start}-{end - 1}")
-            st.update(job_salt=payload["job_salt"], indices=indices, words=[_hex(w) for w in words],
-                      v_salt=_hex(os.urandom(32)))
+            cmp = COMPARISONS[task.compare]
+            result_keys = _keys_bytes(payload.get("result_keys", {}))
+            st.update(job_salt=payload["job_salt"], indices=indices, v_salt=_hex(os.urandom(32)),
+                      words=[_hex(w) for w in cmp.words(task, outputs)],
+                      results_uri=cmp.upload(self.agent.store, result_keys, dict(zip(indices, outputs))))
             leaves = _leaves(st, indices)
             commit = crypto.check_commit(_unhex(st["v_salt"]), leaves)
             self.chain.send(m.commitCheck(job_id, commit), self.agent.account)
@@ -292,7 +401,8 @@ class ReplicatedProvider(ProviderDriver):
 
         if job.status == Status.CHECK_REVEAL and my_state == VState.COMMITTED and not st.get("revealed"):
             leaves = _leaves(st, st["indices"])
-            self.chain.send(m.revealCheck(job_id, leaves, _unhex(st["v_salt"])), self.agent.account)
+            self.chain.send(m.revealCheck(job_id, leaves, _unhex(st["v_salt"]), st.get("results_uri", "")),
+                            self.agent.account)
             st["revealed"] = True
             self.log(job_id, "revealed its check")
             return True
@@ -325,13 +435,42 @@ class ReplicatedProvider(ProviderDriver):
             return True
 
         # A liar only lies as verifier; as tie-breaker every behaviour runs honestly.
-        words = self._run(task, shared, [items[i] for i in mismatched])
-        st.update(job_salt=payload["job_salt"], indices=mismatched, words=[_hex(w) for w in words])
-        leaves = _leaves(st, mismatched)
-        self.chain.send(m.submitTiebreak(job_id, leaves), self.agent.account)
+        outputs = self._run(task, shared, [items[i] for i in mismatched])
+        if task.compare == "similar":
+            verdicts = self._judge(job_id, task, payload, mismatched, outputs)
+            self.chain.send(m.submitJudgement(job_id, verdicts), self.agent.account)
+            bad_m = sum(1 for v in verdicts if not v & 1)
+            self.log(job_id, f"re-ran {len(mismatched)} disputed items: main's result bad on {bad_m}, "
+                             f"verifier's bad on {sum(1 for v in verdicts if not v & 2)}; submitted judgement")
+        else:
+            st.update(job_salt=payload["job_salt"], indices=mismatched,
+                      words=[_hex(w) for w in ExactComparison.words(task, outputs)])
+            self.chain.send(m.submitTiebreak(job_id, _leaves(st, mismatched)), self.agent.account)
+            self.log(job_id, f"ran {len(mismatched)} mismatched items, submitted tie-break")
         st["submitted"] = True
-        self.log(job_id, f"ran {len(mismatched)} mismatched items, submitted tie-break")
         return True
+
+    def _judge(self, job_id: int, task, payload: dict, items: list[int], outputs: list[bytes]) -> list[int]:
+        """Per disputed item: bit 0 if M's file is valid and similar to ours, bit 1 if the owning
+        verifier's file is."""
+        salt = _unhex(payload["job_salt"])
+        store = self.agent.store
+        m_leaves, m_uri = published_results(self.chain, job_id)
+        m_files = load_results(store, m_uri, _keys_bytes(payload["main_result_keys"]), salt,
+                               {i: m_leaves[i] for i in items})
+        check_keys = _keys_bytes(payload.get("check_result_keys", {}))
+        v_files: dict[int, bytes | None] = {}
+        for start, leaves, uri in revealed_checks(self.chain, job_id).values():
+            mine = {i: leaves[i - start] for i in items if i in check_keys and 0 <= i - start < len(leaves)}
+            if mine:
+                v_files.update(load_results(store, uri, {i: check_keys[i] for i in mine}, salt, mine))
+        verdicts = []
+        for i, ours in zip(items, outputs):
+            theirs_m, theirs_v = m_files.get(i), v_files.get(i)
+            ok_m = theirs_m is not None and task.similar(ours, theirs_m)
+            ok_v = theirs_v is not None and task.similar(ours, theirs_v)
+            verdicts.append((1 if ok_m else 0) | (2 if ok_v else 0))
+        return verdicts
 
     # -- helpers ---------------------------------------------------------------------------
 
@@ -346,7 +485,7 @@ class ReplicatedProvider(ProviderDriver):
 
     @staticmethod
     def _item_keys(payload: dict, indices: list[int]) -> dict[int, bytes]:
-        keys = {int(i): _unhex(k) for i, k in payload["item_keys"].items()}
+        keys = _keys_bytes(payload["item_keys"])
         missing = [i for i in indices if i not in keys]
         if missing:
             raise InputError(f"no key for items {missing[:5]}")
@@ -356,10 +495,10 @@ class ReplicatedProvider(ProviderDriver):
         key = (task.name, crypto.keccak(shared) if shared is not None else ZERO32)
         if key not in self._states:
             self._states[key] = task.load(shared)
-        words = task.run(self._states[key], items)
-        if len(words) != len(items) or any(len(w) != 32 for w in words):
-            raise ValueError(f"{task.name}: run() must return one 32-byte word per item")
-        return words
+        outputs = list(task.run(self._states[key], items))
+        if len(outputs) != len(items):
+            raise ValueError(f"{task.name}: run() must return one output per item")
+        return outputs
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +569,9 @@ class ReplicatedClient(ClientDriver):
                     self._share_range(job_id, st, job, slot)
                     did = True
             return did
+        if job.status == Status.DISPUTING and "review" not in st:
+            self._review(job_id, st, job)
+            return True
         if job.status == Status.TIE_BREAK and not job.tieShared:
             self._share_tiebreak(job_id, st, job)
             return True
@@ -445,37 +587,91 @@ class ReplicatedClient(ClientDriver):
         return {
             "job_salt": _hex(crypto.job_salt(k_job)),
             "shared_key": _hex(crypto.shared_key(k_job)),
-            "item_keys": {str(i): _hex(crypto.item_key(k_job, i)) for i in indices},
+            "item_keys": _keys_hex({i: crypto.item_key(k_job, i) for i in indices}),
         }
 
     def _share_range(self, job_id: int, st: dict, job, slot: int) -> None:
+        from degpu.tasks import get
+
         start, end = self.chain.range_of(job_id, slot)
-        payload = self._keys_payload(_unhex(st["k_job"]), list(range(start, end)))
+        k_job = _unhex(st["k_job"])
+        payload = self._keys_payload(k_job, list(range(start, end)))
         payload.update(start=start, end=end)
+        if get(st["task"]).compare == "similar":  # where the verifier uploads its result files
+            payload["result_keys"] = _keys_hex({i: crypto.check_result_key(k_job, slot, i) for i in range(start, end)})
         verifier = job.verifiers[slot]
         sealed = crypto.seal(bytes(self.chain.provider(verifier).encPubKey), payload)
         self.chain.send(self.market.functions.shareRange(job_id, slot, sealed), self.client.account)
         self.log(job_id, f"shared items {start}-{end - 1} with verifier {self.client.nm(verifier)}")
 
+    def _review(self, job_id: int, st: dict, job) -> None:
+        """Similar tasks, Disputing: compare M's files with each verifier's and dispute the items
+        that differ, or whose file is missing or doesn't match its hash; else accept."""
+        from degpu.tasks import get
+
+        task = get(st["task"])
+        k_job = _unhex(st["k_job"])
+        salt = crypto.job_salt(k_job)
+        store = self.client.store
+        m_leaves, m_uri = published_results(self.chain, job_id, st.get("block", 0))
+        n = job.numItems
+        m_files = load_results(store, m_uri, {i: crypto.result_key(k_job, i) for i in range(n)}, salt,
+                               dict(enumerate(m_leaves)))
+        disputed = {i for i, f in m_files.items() if f is None}
+        compared = 0
+        for slot, (start, leaves, uri) in revealed_checks(self.chain, job_id, st.get("block", 0)).items():
+            mine = {start + x: leaf for x, leaf in enumerate(leaves)}
+            v_files = load_results(store, uri, {i: crypto.check_result_key(k_job, slot, i) for i in mine},
+                                   salt, mine)
+            for i, theirs in v_files.items():
+                compared += 1
+                if theirs is None or m_files[i] is None or not task.similar(m_files[i], theirs):
+                    disputed.add(i)
+        st["review"] = {"compared": compared, "disputed": sorted(disputed)}
+        m = self.market.functions
+        if disputed:
+            bond = m.params().call().tiebreakFee
+            self.chain.send(m.dispute(job_id, sorted(disputed)), self.client.account, value=bond)
+            self.log(job_id, f"compared {compared} items with the verifiers; disputing {len(disputed)}: "
+                             f"{sorted(disputed)[:8]}{'...' if len(disputed) > 8 else ''}")
+        else:
+            self.chain.send(m.acceptResults(job_id), self.client.account)
+            self.log(job_id, f"compared {compared} items with the verifiers; all similar, accepted")
+
     def _share_tiebreak(self, job_id: int, st: dict, job) -> None:
+        from degpu.tasks import get
+
         mismatched = [int(i) for i in job.mismatched]
-        payload = self._keys_payload(_unhex(st["k_job"]), mismatched)
+        k_job = _unhex(st["k_job"])
+        payload = self._keys_payload(k_job, mismatched)
         payload["indices"] = mismatched
+        if get(st["task"]).compare == "similar":  # T needs both sides' result files
+            payload["main_result_keys"] = _keys_hex({i: crypto.result_key(k_job, i) for i in mismatched})
+            check_keys = {}
+            for slot in range(len(job.verifiers)):
+                start, end = self.chain.range_of(job_id, slot)
+                check_keys.update({i: crypto.check_result_key(k_job, slot, i) for i in mismatched if start <= i < end})
+            payload["check_result_keys"] = _keys_hex(check_keys)
         sealed = crypto.seal(bytes(self.chain.provider(job.tiebreaker).encPubKey), payload)
         self.chain.send(self.market.functions.shareTiebreak(job_id, sealed), self.client.account)
         self.log(job_id, f"shared {len(mismatched)} mismatched items with tie-breaker "
                          f"{self.client.nm(job.tiebreaker)}")
 
     def results(self, job_id: int) -> list:
-        """One value per item decoded from the ResultsPublished leaves (None = undecodable).
-        Raises LookupError if nothing was published."""
+        """One value per item: decoded words (exact tasks) or M's result files checked against
+        their leaves (similar tasks), through the task's ``present`` (None = undecodable or
+        missing). Raises LookupError if nothing was published."""
         from degpu.tasks import get
 
         st = self.jobs[job_id]
         task = get(st["task"])
-        for ev in self.chain.events(MODE, st.get("block", 0), job_id=job_id):
-            if ev["event"] == "ResultsPublished":
-                leaves = [bytes(x) for x in ev["args"]["leaves"]]
-                words = crypto.decode_leaves(crypto.job_salt(_unhex(st["k_job"])), leaves, task._candidate_list())
-                return [task.present(w) for w in words]
-        raise LookupError(f"job {job_id} has no published results")
+        k_job = _unhex(st["k_job"])
+        leaves, uri = published_results(self.chain, job_id, st.get("block", 0))
+        if not leaves:
+            raise LookupError(f"job {job_id} has no published results")
+        if task.compare == "similar":
+            keys = {i: crypto.result_key(k_job, i) for i in range(len(leaves))}
+            files = load_results(self.client.store, uri, keys, crypto.job_salt(k_job), dict(enumerate(leaves)))
+            return [task.present(files[i]) for i in range(len(leaves))]
+        words = crypto.decode_leaves(crypto.job_salt(k_job), leaves, task._candidate_list())
+        return [task.present(w) for w in words]
