@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DeGPU walkthrough</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="frame">
+  <div id="bg">
+    <div class="blob" id="blobA" style="background:radial-gradient(circle, rgba(94,234,212,.13) 0%, rgba(94,234,212,0) 62%)"></div>
+    <div class="blob" id="blobB" style="background:radial-gradient(circle, rgba(167,139,250,.15) 0%, rgba(167,139,250,0) 62%)"></div>
+    <div class="blob" id="blobC" style="background:radial-gradient(circle, rgba(96,165,250,.07) 0%, rgba(96,165,250,0) 60%)"></div>
+    <div id="dots"></div>
+  </div>
+  <canvas id="bgc" width="1920" height="1080"></canvas>
+  <div id="vig"></div>
+  <div id="scenes"></div>
+  <div id="chapters"></div>
+  <div id="black"></div>
+</div>
+<script src="data.js"></script>
+<script src="narration_durations.js" onerror="0"></script>
+<script src="narration.js"></script>
+<script src="engine.js"></script>
+<script src="scenes.js"></script>
+<script>boot();</script>
+</body>
+</html>

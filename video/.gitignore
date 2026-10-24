@@ -1,0 +1,10 @@
+# rendered outputs (rebuild with the steps in README.md)
+DeGPU-walkthrough.mp4
+DeGPU-walkthrough-captions-only.mp4
+soundtrack.wav
+timeline.json
+narration_lines.json
+.render/
+# generated voice clips, and the local TTS venv + model
+voice/
+.tts/

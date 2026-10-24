@@ -1,0 +1,287 @@
+DeGPU demo: starting a fresh anvil chain and deploying the contracts ...
+  anvil http://127.0.0.1:54474, registry 0x5FbDB2315678afecb367f032d93F642f64180aa3, market 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
+    [A] registered: stake 1 ETH, 0.0001 ETH/item
+    [B] registered: stake 1 ETH, 0.0001 ETH/item
+    [C] registered: stake 1 ETH, 0.0001 ETH/item
+    [D] registered: stake 1 ETH, 0.0001 ETH/item
+    [E] registered: stake 1 ETH, 0.0001 ETH/item
+    [F] registered: stake 1 ETH, 0.0001 ETH/item
+  running the model locally on 200 images for reference labels ...
+
+==============================================================================
+Scenario 1: unverified job (main A, secret decision: no, all honest)
+==============================================================================
+    [client] job 1: posted 200 items to A, deposit 0.04 ETH (secretly: no verification)
+    [A] job 1: offered as main (200 items, verification unknown)
+    [A] job 1: inputs match dataHash, accepted
+    [A] job 1: ran 200 items
+    [A] job 1: committed results
+    [client] job 1: main provider committed; revealed decision: no
+    [A] job 1: published 200 leaves
+    [client] job 1: closed, outcome DELIVERED
+  timeline:
+    block   11  client posts 200 items to A (decision hidden: d8d1763f4e...)
+    block   12  main accepts
+    block   13  main commits to its results (it doesn't know yet whether it will be checked)
+    block   14  client reveals its decision: no verification
+    block   15  main publishes 200 leaves
+    block   15  payout 0.02 ETH -> A
+    block   15  payout 0.02 ETH -> client
+    block   15  job closed: DELIVERED
+  balances (ETH):
+    who    role        wallet net of gas   gas paid  payouts(ev)     stake  stake chg
+    client client              -0.020000   0.000513     0.020000         -  +0.000000
+    A      main                +0.020000   0.000485     0.020000    1.0000  +0.000000
+    B                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    C                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    D                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    E                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    F                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    [ok] balance changes (net of gas) match the Payout / ProviderSlashed events
+    [ok] JobMarket holds no ETH after the job closed
+    [ok] no provider is still locked
+    [ok] outcome DELIVERED (want DELIVERED)
+    [ok] client: wallet -0.020000 (want -0.020000), stake +0.000000 (want +0.000000)
+    [ok] A: wallet +0.020000 (want +0.020000), stake +0.000000 (want +0.000000)
+    [ok] decoded labels equal a local Runner run (200/200 identical)
+
+==============================================================================
+Scenario 2: verified job, honest (main A, secret decision: yes)
+==============================================================================
+    [client] job 2: posted 200 items to A, deposit 0.04 ETH (secretly: verify)
+  what the chain shows right after posting (the main provider sees the same):
+    job    deposit (ETH)  items  main  verifyCommit    
+    1              0.040    200  A     0xd8d1763f4e...
+    2              0.040    200  A     0x5506fc1bb6...
+    [ok] jobs [1, 2] locked the same deposit for the same main: nothing shows which one is verified
+    [A] job 2: offered as main (200 items, verification unknown)
+    [A] job 2: inputs match dataHash, accepted
+    [A] job 2: ran 200 items
+    [A] job 2: committed results
+    [client] job 2: main provider committed; revealed decision: verify
+    [B] job 2: drawn as verifier (slot 0)
+    [E] job 2: drawn as verifier (slot 1)
+    [client] job 2: shared items 0-99 with verifier B
+    [client] job 2: shared items 100-199 with verifier E
+    [B] job 2: ran items 0-99
+    [B] job 2: committed its check
+    [E] job 2: ran items 100-199
+    [E] job 2: committed its check
+    [E] job 2: revealed its check
+    [B] job 2: revealed its check
+    [A] job 2: published 200 leaves
+    [client] job 2: closed, outcome VERIFIED
+  timeline:
+    block   16  client posts 200 items to A (decision hidden: 5506fc1bb6...)
+    block   17  main accepts
+    block   18  main commits to its results (it doesn't know yet whether it will be checked)
+    block   19  client reveals its decision: VERIFY
+    block   19  verifiers drawn: B, E
+    block   20  client seals range 0 to B
+    block   21  client seals range 1 to E
+    block   22  verifier 0 commits to its check
+    block   23  verifier 1 commits to its check
+    block   24  verifier 1 reveals 100 leaves
+    block   25  verifier 0 reveals 100 leaves
+    block   26  main publishes 200 leaves
+    block   26  payout 0.02 ETH -> A
+    block   26  payout 0.01 ETH -> B
+    block   26  payout 0.01 ETH -> E
+    block   26  job closed: VERIFIED
+  balances (ETH):
+    who    role        wallet net of gas   gas paid  payouts(ev)     stake  stake chg
+    client client              -0.040000   0.001427     0.000000         -  +0.000000
+    A      main                +0.020000   0.000980     0.020000    1.0000  +0.000000
+    B      verifier0           +0.010000   0.002551     0.010000    1.0000  +0.000000
+    C                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    D                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    E      verifier1           +0.010000   0.002571     0.010000    1.0000  +0.000000
+    F                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    [ok] balance changes (net of gas) match the Payout / ProviderSlashed events
+    [ok] JobMarket holds no ETH after the job closed
+    [ok] no provider is still locked
+    [ok] outcome VERIFIED (want VERIFIED)
+    [ok] client: wallet -0.040000 (want -0.040000), stake +0.000000 (want +0.000000)
+    [ok] A: wallet +0.020000 (want +0.020000), stake +0.000000 (want +0.000000)
+    [ok] B: wallet +0.010000 (want +0.010000), stake +0.000000 (want +0.000000)
+    [ok] E: wallet +0.010000 (want +0.010000), stake +0.000000 (want +0.000000)
+    [ok] decoded labels equal a local Runner run (200/200 identical)
+
+==============================================================================
+Scenario 3: cheater caught (main E fakes 20% of labels, secret decision: yes)
+==============================================================================
+    [client] job 3: posted 200 items to E, deposit 0.04 ETH (secretly: verify)
+    [E] job 3: offered as main (200 items, verification unknown)
+    [E] job 3: inputs match dataHash, accepted
+    [E] job 3: ran 200 items, faked 40 labels
+    [E] job 3: committed results
+    [client] job 3: main provider committed; revealed decision: verify
+    [A] job 3: drawn as verifier (slot 0)
+    [F] job 3: drawn as verifier (slot 1)
+    [client] job 3: shared items 0-99 with verifier A
+    [client] job 3: shared items 100-199 with verifier F
+    [A] job 3: ran items 0-99
+    [A] job 3: committed its check
+    [F] job 3: ran items 100-199
+    [F] job 3: committed its check
+    [F] job 3: revealed its check
+    [A] job 3: revealed its check
+    [E] job 3: published 200 leaves
+    [client] job 3: shared 40 mismatched items with tie-breaker B
+    [B] job 3: drawn as tie-breaker (40 items)
+    [B] job 3: ran 40 mismatched items, submitted tie-break
+    [client] job 3: closed, outcome MAIN_OUTVOTED
+  timeline:
+    block   27  client posts 200 items to E (decision hidden: 99bc026389...)
+    block   28  main accepts
+    block   29  main commits to its results (it doesn't know yet whether it will be checked)
+    block   30  client reveals its decision: VERIFY
+    block   30  verifiers drawn: A, F
+    block   31  client seals range 0 to A
+    block   32  client seals range 1 to F
+    block   33  verifier 0 commits to its check
+    block   34  verifier 1 commits to its check
+    block   35  verifier 1 reveals 100 leaves
+    block   36  verifier 0 reveals 100 leaves
+    block   37  main publishes 200 leaves
+    block   37  40 items mismatch [10, 15, 31, 35, 37, 45]...; tie-breaker drawn: B
+    block   38  client seals the mismatched items to B
+    block   39  tie-breaker submits 40 leaves
+    block   39  E slashed 0.3 ETH
+    block   39  payout 0.01 ETH -> A
+    block   39  payout 0.01 ETH -> F
+    block   39  payout 0.002 ETH -> B
+    block   39  payout 0.318 ETH -> client
+    block   39  job closed: MAIN_OUTVOTED
+  balances (ETH):
+    who    role        wallet net of gas   gas paid  payouts(ev)     stake  stake chg
+    client client              +0.278000   0.001465     0.318000         -  +0.000000
+    A      verifier0           +0.010000   0.002467     0.010000    1.0000  +0.000000
+    B      tiebreaker          +0.002000   0.000575     0.002000    1.0000  +0.000000
+    C                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    D                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    E      main                +0.000000   0.002826     0.000000    0.7000  -0.300000
+    F      verifier1           +0.010000   0.002478     0.010000    1.0000  +0.000000
+    [ok] balance changes (net of gas) match the Payout / ProviderSlashed events
+    [ok] JobMarket holds no ETH after the job closed
+    [ok] no provider is still locked
+    [ok] outcome MAIN_OUTVOTED (want MAIN_OUTVOTED)
+    [ok] client: wallet +0.278000 (want +0.278000), stake +0.000000 (want +0.000000)
+    [ok] A: wallet +0.010000 (want +0.010000), stake +0.000000 (want +0.000000)
+    [ok] B: wallet +0.002000 (want +0.002000), stake +0.000000 (want +0.000000)
+    [ok] E: wallet +0.000000 (want +0.000000), stake -0.300000 (want -0.300000)
+    [ok] F: wallet +0.010000 (want +0.010000), stake +0.000000 (want +0.000000)
+    [ok] the contract flagged exactly E's 40 faked items (full coverage, no luck involved)
+    [ok] decoded labels differ from a local run exactly on the faked items
+    [ok] E's stake fell below minStake: E is suspended
+
+==============================================================================
+Scenario 4: lying verifiers (main A, secret decision: yes, every other provider lies as verifier)
+==============================================================================
+    [client] job 4: posted 200 items to A, deposit 0.04 ETH (secretly: verify)
+    [A] job 4: offered as main (200 items, verification unknown)
+    [A] job 4: inputs match dataHash, accepted
+    [A] job 4: ran 200 items
+    [A] job 4: committed results
+    [client] job 4: main provider committed; revealed decision: verify
+    [B] job 4: drawn as verifier (slot 1)
+    [F] job 4: drawn as verifier (slot 0)
+    [client] job 4: shared items 0-99 with verifier F
+    [client] job 4: shared items 100-199 with verifier B
+    [B] job 4: making up 100 random labels for items 100-199
+    [B] job 4: committed its check
+    [F] job 4: making up 100 random labels for items 0-99
+    [F] job 4: committed its check
+    [F] job 4: revealed its check
+    [B] job 4: revealed its check
+    [A] job 4: published 200 leaves
+    [D] job 4: drawn as tie-breaker (200 items)
+    [client] job 4: shared 200 mismatched items with tie-breaker D
+    [D] job 4: ran 200 mismatched items, submitted tie-break
+    [client] job 4: closed, outcome VERIFIER_OUTVOTED
+  timeline:
+    block   40  client posts 200 items to A (decision hidden: 2c4d3dc4d1...)
+    block   41  main accepts
+    block   42  main commits to its results (it doesn't know yet whether it will be checked)
+    block   43  client reveals its decision: VERIFY
+    block   43  verifiers drawn: F, B
+    block   44  client seals range 0 to F
+    block   45  client seals range 1 to B
+    block   46  verifier 1 commits to its check
+    block   47  verifier 0 commits to its check
+    block   48  verifier 0 reveals 100 leaves
+    block   49  verifier 1 reveals 100 leaves
+    block   50  main publishes 200 leaves
+    block   50  200 items mismatch [0, 1, 2, 3, 4, 5]...; tie-breaker drawn: D
+    block   51  client seals the mismatched items to D
+    block   52  tie-breaker submits 200 leaves
+    block   52  F slashed 0.3 ETH
+    block   52  B slashed 0.3 ETH
+    block   52  payout 0.02 ETH -> A
+    block   52  payout 0.002 ETH -> D
+    block   52  payout 0.618 ETH -> client
+    block   52  job closed: VERIFIER_OUTVOTED
+  balances (ETH):
+    who    role        wallet net of gas   gas paid  payouts(ev)     stake  stake chg
+    client client              +0.578000   0.001949     0.618000         -  +0.000000
+    A      main                +0.020000   0.010052     0.020000    1.0000  +0.000000
+    B      verifier1           +0.000000   0.002449     0.000000    0.7000  -0.300000
+    C                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    D      tiebreaker          +0.002000   0.001526     0.002000    1.0000  +0.000000
+    E                          +0.000000   0.000000     0.000000    0.7000  +0.000000
+    F      verifier0           +0.000000   0.002449     0.000000    0.7000  -0.300000
+    [ok] balance changes (net of gas) match the Payout / ProviderSlashed events
+    [ok] JobMarket holds no ETH after the job closed
+    [ok] no provider is still locked
+    [ok] outcome VERIFIER_OUTVOTED (want VERIFIER_OUTVOTED)
+    [ok] client: wallet +0.578000 (want +0.578000), stake +0.000000 (want +0.000000)
+    [ok] A: wallet +0.020000 (want +0.020000), stake +0.000000 (want +0.000000)
+    [ok] B: wallet +0.000000 (want +0.000000), stake -0.300000 (want -0.300000)
+    [ok] D: wallet +0.002000 (want +0.002000), stake +0.000000 (want +0.000000)
+    [ok] F: wallet +0.000000 (want +0.000000), stake -0.300000 (want -0.300000)
+    [ok] decoded labels equal a local Runner run (200/200 identical)
+
+==============================================================================
+Scenario 5: main offline (main F, secret decision: no): time travel, then expire()
+==============================================================================
+  F tops its stake back up to 1 ETH (+0.3 ETH) before the scenario
+    [client] job 5: posted 200 items to F, deposit 0.04 ETH (secretly: no verification)
+    [F] job 5: offered as main (200 items, verification unknown)
+    [F] job 5: inputs match dataHash, accepted
+    [F] job 5: goes offline
+    [ok] job stuck in COMMITTING (want COMMITTING)
+    [client] job 5: called expire()
+    [client] job 5: closed, outcome MAIN_MISSED
+  timeline:
+    block   54  client posts 200 items to F (decision hidden: 1424d6b9cb...)
+    block   55  main accepts
+    block   56  -- time travel +601 s, past the commit deadline --
+    block   57  F slashed 0.1 ETH
+    block   57  payout 0.14 ETH -> client
+    block   57  job closed: MAIN_MISSED
+  balances (ETH):
+    who    role        wallet net of gas   gas paid  payouts(ev)     stake  stake chg
+    client client              +0.100000   0.000452     0.140000         -  +0.000000
+    A                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    B                          +0.000000   0.000000     0.000000    0.7000  +0.000000
+    C                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    D                          +0.000000   0.000000     0.000000    1.0000  +0.000000
+    E                          +0.000000   0.000000     0.000000    0.7000  +0.000000
+    F      main                +0.000000   0.000071     0.000000    0.9000  -0.100000
+    [ok] balance changes (net of gas) match the Payout / ProviderSlashed events
+    [ok] JobMarket holds no ETH after the job closed
+    [ok] no provider is still locked
+    [ok] outcome MAIN_MISSED (want MAIN_MISSED)
+    [ok] client: wallet +0.100000 (want +0.100000), stake +0.000000 (want +0.000000)
+    [ok] F: wallet +0.000000 (want +0.000000), stake -0.100000 (want -0.100000)
+
+Reputation counters (ProviderRegistry stats) and stakes:
+           stake  verified   unverif    missed  outvoted    checks   chkMiss   chkOutv
+    A      1.000         2         1         0         0         1         0         0
+    B      0.700         0         0         0         0         2         0         1
+    C      1.000         0         0         0         0         0         0         0
+    D      1.000         0         0         0         0         1         0         0
+    E      0.700         0         0         0         1         1         0         0
+    F      0.900         0         0         1         0         1         0         1
+
+DEMO PASSED: all scenarios settled as expected.
