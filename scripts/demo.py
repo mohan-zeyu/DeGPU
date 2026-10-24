@@ -2,16 +2,18 @@
 
     uv run scripts/demo.py
 
-Setup (docs/INTERFACE.md section 9): start anvil, deploy the contracts,
+Setup (docs/INTERFACE.md v2, section 9): start anvil, deploy the contracts,
 register providers A-F (1 ETH stake, 0.0001 ETH per item, each with its own
 X25519 key) and use the 200 demo images in assets/images/ with the
-MobileNetV2 model.
+MobileNetV2 model. Every job deposits 2 x price (0.040 ETH) and commits to a
+secret verify yes/no that is revealed only after the main provider committed.
 
 Scenarios:
-  1. unverified job, main A, honest
-  2. verified job (sample 20), main A, all honest
-  3. cheater caught: main E fakes 20% of its labels
-  4. lying verifier: every provider except A answers random labels as verifier
+  1. unverified job (secret "no"), main A, honest
+  2. verified job (secret "yes"), main A, all honest: two verifiers re-run
+     100 items each; also shows that jobs 1 and 2 looked identical on-chain
+  3. cheater caught: main E fakes 20% of its labels; every faked item is caught
+  4. lying verifiers: every provider except A answers random labels as verifier
   5. main F goes offline: time travel past the deadline, then expire()
 
 Everything runs in-process with a deterministic step loop (client first,
@@ -45,6 +47,7 @@ from degpu.chain import (
     Outcome,
     Stat,
     Status,
+    VState,
     start_local_chain,
 )
 from degpu.client import Client
@@ -55,8 +58,6 @@ REPO = Path(__file__).resolve().parent.parent
 MODEL_PATH = REPO / "assets" / "mobilenetv2.onnx"
 IMAGE_DIR = REPO / "assets" / "images"
 NUM_IMAGES = 200
-SAMPLE_RATE = 0.1  # 20 of 200 items
-CHEAT_RETRIES = 3  # scenario 3: extra attempts if the cheat escapes the sample
 
 
 def wei(eth_str: str) -> int:
@@ -80,6 +81,7 @@ class World:
     expected_labels: list[int]
     names: dict[str, str] = field(default_factory=dict)  # address -> short name
     failures: list[str] = field(default_factory=list)
+    job_ids: dict[int, int] = field(default_factory=dict)  # scenario -> jobId
 
     def nm(self, addr: str) -> str:
         return self.names.get(addr, addr[:10])
@@ -156,8 +158,8 @@ def set_behaviors(world: World, default: str = "honest", **overrides: str) -> No
         ag.behavior = overrides.get(name, default)
 
 
-def post(world: World, main: str, sample_rate: float) -> int:
-    return world.client.post(world.addr(main), MODEL_PATH, world.images, sample_rate)
+def post(world: World, main: str, verify: bool) -> int:
+    return world.client.post(world.addr(main), MODEL_PATH, world.images, verify)
 
 
 # ---------------------------------------------------------------------------
@@ -168,25 +170,30 @@ def describe(world: World, ev) -> str:
     n, a = ev["event"], ev["args"]
     nm = world.nm
     if n == "JobCreated":
-        return f"client posts {a['numItems']} items to {nm(a['main'])}, sample size {a['sampleSize']}"
+        return f"client posts {a['numItems']} items to {nm(a['main'])} (decision hidden: {bytes(a['verifyCommit']).hex()[:10]}...)"
     if n == "JobAccepted":
-        v = a["verifier"]
-        return "main accepts" + (f"; verifier drawn: {nm(v)}" if v != ZERO_ADDRESS else " (no verifier)")
+        return "main accepts"
+    if n == "ResultsCommitted":
+        return "main commits to its results (it doesn't know yet whether it will be checked)"
+    if n == "DecisionRevealed":
+        return f"client reveals its decision: {'VERIFY' if a['verify'] else 'no verification'}"
     if n == "VerificationDropped":
         return f"verification dropped: {Drop(a['reason']).name}"
-    if n == "SampleShared":
-        return f"client seals the sample to {nm(a['verifier'])}"
-    if n == "ResultsCommitted":
-        return "main commits to its results"
-    if n == "SampleCommitted":
-        return "verifier commits to its sample results"
-    if n == "SampleRevealed":
-        return f"verifier reveals {len(a['indices'])} sampled leaves (indices {list(a['indices'])[:5]}...)"
+    if n == "VerifiersDrawn":
+        return "verifiers drawn: " + ", ".join(nm(v) for v in a["verifiers"])
+    if n == "RangeShared":
+        return f"client seals range {a['slot']} to {nm(a['verifier'])}"
+    if n == "CheckCommitted":
+        return f"verifier {a['slot']} commits to its check"
+    if n == "VerifierDropped":
+        return f"verifier {a['slot']} dropped: {VState(a['reason']).name}"
+    if n == "CheckRevealed":
+        return f"verifier {a['slot']} reveals {len(a['leaves'])} leaves"
     if n == "ResultsPublished":
         return f"main publishes {len(a['leaves'])} leaves"
     if n == "TiebreakStarted":
         m = list(a["mismatched"])
-        return f"{len(m)} sampled items mismatch {m[:6]}; tie-breaker drawn: {nm(a['tiebreaker'])}"
+        return f"{len(m)} items mismatch {m[:6]}{'...' if len(m) > 6 else ''}; tie-breaker drawn: {nm(a['tiebreaker'])}"
     if n == "TiebreakShared":
         return f"client seals the mismatched items to {nm(a['tiebreaker'])}"
     if n == "TiebreakSubmitted":
@@ -214,8 +221,8 @@ def settle_report(world: World, job_id: int, before: dict, events: list) -> dict
     after = snapshot(world)
     job = c.job(job_id)
     roles = {job.client: "client", job.main: "main"}
-    if job.verifier != ZERO_ADDRESS:
-        roles[job.verifier] = "verifier"
+    for slot, v in enumerate(job.verifiers):
+        roles[v] = f"verifier{slot}"
     if job.tiebreaker != ZERO_ADDRESS:
         roles[job.tiebreaker] = "tiebreaker"
 
@@ -245,7 +252,7 @@ def settle_report(world: World, job_id: int, before: dict, events: list) -> dict
     # Cross-checks that hold for every job: the events explain every balance change.
     # wallet change net of gas == Payout events (minus what the client paid in);
     # stake change == -(ProviderSlashed events)
-    paid_in = job.price + job.fee
+    paid_in = 2 * job.price  # every job deposits 2 x price
     mismatches = []
     for addr, (net, dstake) in deltas.items():
         from_events = payouts.get(addr, 0) - (paid_in if addr == job.client else 0)
@@ -262,7 +269,8 @@ def settle_report(world: World, job_id: int, before: dict, events: list) -> dict
 
 def expect(world: World, deltas: dict, job, expected: dict[str, tuple[str, str]]) -> None:
     """``expected``: role or name -> (wallet net ETH, stake change ETH). Everyone else: (0, 0)."""
-    role_addr = {"client": job.client, "main": job.main, "verifier": job.verifier, "tiebreaker": job.tiebreaker}
+    role_addr = {"client": job.client, "main": job.main, "tiebreaker": job.tiebreaker}
+    role_addr.update({f"verifier{slot}": v for slot, v in enumerate(job.verifiers)})
     want = {}
     for who, (w, s) in expected.items():
         addr = role_addr.get(who) or world.addr(who)
@@ -301,10 +309,10 @@ def header(n: int, title: str) -> None:
 
 
 def scenario_1(world: World) -> None:
-    header(1, "unverified job (main A, sample 0, all honest)")
+    header(1, "unverified job (main A, secret decision: no, all honest)")
     set_behaviors(world)
     before, blk = snapshot(world), world.chain.block_number() + 1
-    job_id = post(world, "A", 0)
+    job_id = world.job_ids[1] = post(world, "A", False)
     drive(world, job_id)
     job, deltas = finish(world, job_id, before, blk)
     world.check(job.outcome == Outcome.DELIVERED, f"outcome {Outcome(job.outcome).name} (want DELIVERED)")
@@ -312,86 +320,105 @@ def scenario_1(world: World) -> None:
     check_labels(world, job_id)
 
 
+def show_hidden_decision(world: World, job_ids: list[int]) -> None:
+    """What anyone (including the main provider) sees on-chain right after posting."""
+    c = world.chain
+    print("  what the chain shows right after posting (the main provider sees the same):")
+    print(f"    {'job':<5}{'deposit (ETH)':>15}{'items':>7}  {'main':<6}{'verifyCommit':<16}")
+    rows = []
+    for jid in job_ids:
+        ev = next(e for e in c.market_events(0, job_id=jid) if e["event"] == "JobCreated")
+        value = c.w3.eth.get_transaction(ev["transactionHash"])["value"]
+        a = ev["args"]
+        rows.append((value, a["numItems"], a["main"]))
+        print(f"    {jid:<5}{value / ETHER:>15.3f}{a['numItems']:>7}  {world.nm(a['main']):<6}"
+              f"0x{bytes(a['verifyCommit']).hex()[:10]}...")
+    world.check(len(set(rows)) == 1,
+                f"jobs {job_ids} locked the same deposit for the same main: nothing shows which one is verified")
+
+
 def scenario_2(world: World) -> None:
-    header(2, "verified job, honest (main A, sample 20)")
+    header(2, "verified job, honest (main A, secret decision: yes)")
     set_behaviors(world)
     before, blk = snapshot(world), world.chain.block_number() + 1
-    job_id = post(world, "A", SAMPLE_RATE)
+    job_id = world.job_ids[2] = post(world, "A", True)
+    show_hidden_decision(world, [world.job_ids[1], job_id])
     drive(world, job_id)
     job, deltas = finish(world, job_id, before, blk)
     world.check(job.outcome == Outcome.VERIFIED, f"outcome {Outcome(job.outcome).name} (want VERIFIED)")
-    expect(world, deltas, job, {"client": ("-0.022", "0"), "A": ("0.020", "0"), "verifier": ("0.002", "0")})
+    expect(world, deltas, job, {
+        "client": ("-0.040", "0"),
+        "A": ("0.020", "0"),
+        "verifier0": ("0.010", "0"),
+        "verifier1": ("0.010", "0"),
+    })
     check_labels(world, job_id)
 
 
 def scenario_3(world: World) -> None:
-    header(3, "cheater caught (main E fakes 20% of labels, sample 20)")
+    header(3, "cheater caught (main E fakes 20% of labels, secret decision: yes)")
     set_behaviors(world, E="cheat")
-    for attempt in range(1, CHEAT_RETRIES + 2):
-        before, blk = snapshot(world), world.chain.block_number() + 1
-        job_id = post(world, "E", SAMPLE_RATE)
-        drive(world, job_id)
-        job = world.chain.job(job_id)
-        if job.outcome == Outcome.VERIFIED and attempt <= CHEAT_RETRIES:
-            print("  !! the cheat escaped the sample (no faked item among the 20 sampled; ~1% chance).")
-            print(f"  !! retrying with a new job (retry {attempt} of {CHEAT_RETRIES})")
-            continue
-        break
+    before, blk = snapshot(world), world.chain.block_number() + 1
+    job_id = world.job_ids[3] = post(world, "E", True)
+    drive(world, job_id)
     job, deltas = finish(world, job_id, before, blk)
     world.check(job.outcome == Outcome.MAIN_OUTVOTED, f"outcome {Outcome(job.outcome).name} (want MAIN_OUTVOTED)")
     expect(world, deltas, job, {
-        "client": ("0.296", "0"),
+        "client": ("0.278", "0"),
         "E": ("0", "-0.3"),
-        "verifier": ("0.002", "0"),
+        "verifier0": ("0.010", "0"),
+        "verifier1": ("0.010", "0"),
         "tiebreaker": ("0.002", "0"),
     })
-    # The client sees exactly which labels were faked: they differ from a local run.
+    # Every item was re-run, so every faked label was caught.
     faked = set(world.agents["E"].jobs[job_id].get("cheated", []))
+    world.check(set(int(i) for i in job.mismatched) == faked and len(faked) == 40,
+                f"the contract flagged exactly E's {len(faked)} faked items (full coverage, no luck involved)")
     labels = world.client.results(job_id)
     differ = {i for i, (a, b) in enumerate(zip(labels, world.expected_labels)) if a != b}
-    world.check(differ == faked and len(faked) == 40,
-                f"decoded labels differ from a local run exactly on E's {len(faked)} faked items")
+    world.check(differ == faked, "decoded labels differ from a local run exactly on the faked items")
     world.check(not world.chain.registry.functions.isActive(job.main).call(),
                 "E's stake fell below minStake: E is suspended")
 
 
 def scenario_4(world: World) -> None:
-    header(4, "lying verifier (main A, sample 20, every other provider lies as verifier)")
+    header(4, "lying verifiers (main A, secret decision: yes, every other provider lies as verifier)")
     set_behaviors(world, default="liar", A="honest")
     before, blk = snapshot(world), world.chain.block_number() + 1
-    job_id = post(world, "A", SAMPLE_RATE)
+    job_id = world.job_ids[4] = post(world, "A", True)
     drive(world, job_id)
     job, deltas = finish(world, job_id, before, blk)
     world.check(job.outcome == Outcome.VERIFIER_OUTVOTED,
                 f"outcome {Outcome(job.outcome).name} (want VERIFIER_OUTVOTED)")
     expect(world, deltas, job, {
-        "client": ("-0.020", "0"),
-        "A": ("0.318", "0"),
-        "verifier": ("0", "-0.3"),
+        "client": ("0.578", "0"),
+        "A": ("0.020", "0"),
+        "verifier0": ("0", "-0.3"),
+        "verifier1": ("0", "-0.3"),
         "tiebreaker": ("0.002", "0"),
     })
     check_labels(world, job_id)
 
 
 def scenario_5(world: World) -> None:
-    header(5, "main offline (main F, sample 0): time travel, then expire()")
+    header(5, "main offline (main F, secret decision: no): time travel, then expire()")
     set_behaviors(world, F="offline")
     c = world.chain
     f = world.agents["F"]
     stake = c.stake(f.account)
-    if stake < PROVIDER_STAKE:  # F may have been the slashed liar in scenario 4
+    if stake < PROVIDER_STAKE:  # F may have been one of the slashed liars in scenario 4
         top_up = PROVIDER_STAKE - stake
         c.send(c.registry.functions.addStake(), f.account, value=top_up)
         print(f"  F tops its stake back up to 1 ETH (+{top_up / ETHER:g} ETH) before the scenario")
     before, blk = snapshot(world), c.block_number() + 1
-    job_id = post(world, "F", 0)
+    job_id = world.job_ids[5] = post(world, "F", False)
     job = drive(world, job_id)
-    world.check(job.status == Status.PUBLISHING, f"job stuck in {Status(job.status).name} (want PUBLISHING)")
+    world.check(job.status == Status.COMMITTING, f"job stuck in {Status(job.status).name} (want COMMITTING)")
 
     jump = job.deadline - c.now() + 1
     c.increase_time(jump)
     c.mine()
-    notes = [(c.block_number(), f"time travel +{jump} s, past the publish deadline")]
+    notes = [(c.block_number(), f"time travel +{jump} s, past the commit deadline")]
     world.client.expire(job_id)
     drive(world, job_id)
     job, deltas = finish(world, job_id, before, blk, notes)

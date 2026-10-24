@@ -41,14 +41,17 @@ def test_results_commit_golden():
     )
 
 
-def test_sample_hash_golden():
-    assert crypto.sample_hash(b32(0x22), [0, 5, 9]) == h(
-        "0xa3f2acca7f8ff2353d15988e2b4d6043e7b51d3f53492f8dbb5b11b3856497bc"
+def test_verify_commit_golden():
+    assert crypto.verify_commit(b32(0x88), True) == h(
+        "0xa2f6db48e4217cc07583f9ea52bd1fc0e90a717552373e82eea50b3a6ff9c928"
+    )
+    assert crypto.verify_commit(b32(0x88), False) == h(
+        "0x571c2a6cc17bceba7d421165d8f2117dc954cbf951b4ebbb0cf9b95697b23540"
     )
 
 
-def test_sample_commit_golden():
-    assert crypto.sample_commit(b32(0x33), [LEAF_0_1, LEAF_1_2]) == h(
+def test_check_commit_golden():
+    assert crypto.check_commit(b32(0x33), [LEAF_0_1, LEAF_1_2]) == h(
         "0x50ea9093e9d3cc68aa0d194796a05d23b83e807ff05aabb344f341ff9b6159d3"
     )
 

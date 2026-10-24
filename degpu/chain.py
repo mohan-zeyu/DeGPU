@@ -1,7 +1,7 @@
 """Blockchain plumbing for DeGPU: a local anvil node, contract deployment and
 small web3.py (v8) helpers used by the client, the provider agents and the demo.
 
-Main pieces (docs/INTERFACE.md sections 7 and 8):
+Main pieces (docs/INTERFACE.md v2, sections 7 and 8):
 
 * ``Anvil`` starts and stops a local anvil node on a free port (default
   mnemonic, so account 0 is the deployer, 1 the client, 2-7 providers A-F).
@@ -57,6 +57,8 @@ TASK_TYPE_ID = 1
 DEMO_PARAMS = (
     300,  # acceptWindow
     600,  # computeWindow
+    300,  # decideWindow
+    600,  # checkWindow
     300,  # revealWindow
     300,  # publishWindow
     600,  # tiebreakWindow
@@ -65,7 +67,9 @@ DEMO_PARAMS = (
     1000,  # missedSlashBps
     500,  # checkMissedSlashBps
     0,  # maxMismatch
+    2,  # numVerifiers
 )
+NUM_VERIFIERS = DEMO_PARAMS[-1]
 
 # Account roles for anvil's default mnemonic (INTERFACE.md section 1).
 DEPLOYER_INDEX = 0
@@ -82,10 +86,12 @@ class Status(IntEnum):
     NONE = 0
     OPEN = 1
     COMMITTING = 2
-    SAMPLE_REVEAL = 3
-    PUBLISHING = 4
-    TIE_BREAK = 5
-    CLOSED = 6
+    DECIDING = 3
+    CHECKING = 4
+    CHECK_REVEAL = 5
+    PUBLISHING = 6
+    TIE_BREAK = 7
+    CLOSED = 8
 
 
 class Outcome(IntEnum):
@@ -104,10 +110,20 @@ class Outcome(IntEnum):
 
 class Drop(IntEnum):
     NONE = 0
-    NO_ELIGIBLE_VERIFIER = 1
-    CLIENT_NO_SHARE = 2
-    BAD_INPUT = 3
-    VERIFIER_MISSED = 4
+    CLIENT_NO_REVEAL = 1
+    NO_ELIGIBLE_VERIFIER = 2
+
+
+class VState(IntEnum):
+    NONE = 0
+    ASSIGNED = 1
+    SHARED = 2
+    COMMITTED = 3
+    REVEALED = 4
+    NO_SHARE = 5
+    BAD_INPUT = 6
+    MISSED = 7
+    OUTVOTED = 8
 
 
 class Stat(IntEnum):
@@ -316,8 +332,13 @@ class Chain:
         return self.registry.functions.statOf(addr, int(s)).call()
 
     def job(self, job_id: int):
-        """market.getJob(jobId) as a named tuple (job.status, job.verifier, ...)."""
+        """market.getJob(jobId) as a named tuple (job.status, job.verifiers, ...)."""
         return self.market.functions.getJob(job_id).call()
+
+    def range_of(self, job_id: int, slot: int) -> tuple[int, int]:
+        """Items [start, end) covered by verifier ``slot`` of the job."""
+        start, end = self.market.functions.rangeOf(job_id, slot).call()
+        return start, end
 
     def runner_hash_of(self, task_type: int) -> bytes:
         return bytes(self.market.functions.taskTypeOf(task_type).call()[0])

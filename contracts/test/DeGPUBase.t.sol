@@ -7,7 +7,8 @@ import {JobMarket} from "../src/JobMarket.sol";
 
 /// @notice Shared fixture: registry + market with the demo parameters, six providers A-F with
 ///         1 ETH stake at 0.0001 ETH per item, and a funded client. Jobs default to the demo
-///         size (200 items, 20 sampled), so price = 0.02 ETH and fee = 0.002 ETH.
+///         size (200 items), so price = 0.02 ETH, deposit = 0.04 ETH, and each of the two
+///         verifiers covers 100 items for 0.01 ETH.
 abstract contract DeGPUBase is Test {
     ProviderRegistry internal registry;
     JobMarket internal market;
@@ -29,13 +30,13 @@ abstract contract DeGPUBase is Test {
     bytes32 internal constant RUNNER_HASH = keccak256("runner.py");
     bytes32 internal constant DATA_HASH = keccak256("dataHash");
     bytes32 internal constant JOB_SALT = 0x1111111111111111111111111111111111111111111111111111111111111111;
-    bytes32 internal constant SAMPLE_SALT = 0x2222222222222222222222222222222222222222222222222222222222222222;
     bytes32 internal constant V_SALT = 0x3333333333333333333333333333333333333333333333333333333333333333;
+    bytes32 internal constant VERIFY_SALT = 0x8888888888888888888888888888888888888888888888888888888888888888;
 
     uint256 internal constant N = 200;
-    uint256 internal constant K = 20;
     uint256 internal constant PRICE = N * PPI; // 0.02 ETH
-    uint256 internal constant FEE = K * PPI; // 0.002 ETH
+    uint256 internal constant DEPOSIT = 2 * PRICE; // 0.04 ETH
+    uint256 internal constant HALF_FEE = (N / 2) * PPI; // 0.01 ETH per verifier
 
     // Expected slash amounts on a 1 ETH stake with the demo bps.
     uint256 internal constant SLASH_WRONG = 0.3 ether; // 3000 bps
@@ -55,6 +56,8 @@ abstract contract DeGPUBase is Test {
         return JobMarket.Params({
             acceptWindow: 300,
             computeWindow: 600,
+            decideWindow: 300,
+            checkWindow: 600,
             revealWindow: 300,
             publishWindow: 300,
             tiebreakWindow: 600,
@@ -62,7 +65,8 @@ abstract contract DeGPUBase is Test {
             wrongSlashBps: 3000,
             missedSlashBps: 1000,
             checkMissedSlashBps: 500,
-            maxMismatch: 0
+            maxMismatch: 0,
+            numVerifiers: 2
         });
     }
 
@@ -125,63 +129,54 @@ abstract contract DeGPUBase is Test {
         }
     }
 
-    /// Evenly spaced sample indices: 0, n/k, 2n/k, ... (strictly increasing).
-    function _indices(uint256 n, uint256 k) internal pure returns (uint256[] memory idx) {
-        idx = new uint256[](k);
-        if (k == 0) return idx;
-        uint256 step = n / k;
-        for (uint256 j = 0; j < k; j++) {
-            idx[j] = j * step;
+    function _copy(bytes32[] memory l) internal pure returns (bytes32[] memory c) {
+        c = new bytes32[](l.length);
+        for (uint256 i = 0; i < l.length; i++) {
+            c[i] = l[i];
         }
     }
 
-    function _pick(bytes32[] memory l, uint256[] memory idx) internal pure returns (bytes32[] memory s) {
-        s = new bytes32[](idx.length);
-        for (uint256 j = 0; j < idx.length; j++) {
-            s[j] = l[idx[j]];
+    function _slice(bytes32[] memory l, uint256 s, uint256 e) internal pure returns (bytes32[] memory out) {
+        out = new bytes32[](e - s);
+        for (uint256 i = s; i < e; i++) {
+            out[i - s] = l[i];
         }
-    }
-
-    function _sampleHash(uint256[] memory idx) internal pure returns (bytes32) {
-        return keccak256(abi.encode(SAMPLE_SALT, idx));
     }
 
     function _resultsCommit(bytes32[] memory l) internal pure returns (bytes32) {
         return keccak256(abi.encode(l));
     }
 
-    function _sampleCommit(bytes32[] memory l) internal pure returns (bytes32) {
+    function _checkCommit(bytes32[] memory l) internal pure returns (bytes32) {
         return keccak256(abi.encode(V_SALT, l));
+    }
+
+    function _verifyCommit(bool verify) internal pure returns (bytes32) {
+        return keccak256(abi.encode(VERIFY_SALT, verify));
     }
 
     // ------------------------------------------------------------------
     // Job flow helpers
     // ------------------------------------------------------------------
 
-    function _value(uint256 n, uint256 k) internal pure returns (uint256) {
-        return (n + k) * PPI;
-    }
-
-    function _create(address main, uint256 n, uint256 k) internal returns (uint256 id) {
-        uint256[] memory idx = _indices(n, k);
-        bytes32 sh = k > 0 ? _sampleHash(idx) : bytes32(0);
+    function _create(address main, uint256 n, bool verify) internal returns (uint256 id) {
         vm.prank(client);
-        id = market.createJob{value: _value(n, k)}(main, TASK, n, DATA_HASH, "store:manifest", k, sh, hex"5ea1ed");
+        id = market.createJob{value: 2 * n * PPI}(
+            main, TASK, n, DATA_HASH, "store:manifest", _verifyCommit(verify), hex"5ea1ed"
+        );
     }
 
     function _job(uint256 id) internal view returns (JobMarket.Job memory) {
         return market.getJob(id);
     }
 
-    function _accept(uint256 id) internal returns (address verifier) {
-        vm.prank(_job(id).main);
-        market.accept(id);
-        verifier = _job(id).verifier;
+    function _verifiers(uint256 id) internal view returns (address[] memory) {
+        return market.getJob(id).verifiers;
     }
 
-    function _share(uint256 id) internal {
-        vm.prank(client);
-        market.shareSample(id, hex"aa01");
+    function _accept(uint256 id) internal {
+        vm.prank(_job(id).main);
+        market.accept(id);
     }
 
     function _commitM(uint256 id, bytes32[] memory leaves) internal {
@@ -189,15 +184,36 @@ abstract contract DeGPUBase is Test {
         market.commitResults(id, _resultsCommit(leaves));
     }
 
-    function _commitV(uint256 id, bytes32[] memory vLeaves) internal {
-        vm.prank(_job(id).verifier);
-        market.commitSample(id, _sampleCommit(vLeaves));
+    /// The client reveals its decision; returns the drawn verifiers (empty if none).
+    function _decide(uint256 id, bool verify) internal returns (address[] memory) {
+        vm.prank(client);
+        market.revealDecision(id, VERIFY_SALT, verify);
+        return _verifiers(id);
     }
 
-    function _reveal(uint256 id, bytes32[] memory vLeaves) internal {
-        JobMarket.Job memory j = _job(id);
-        vm.prank(j.verifier);
-        market.revealSample(id, _indices(j.numItems, j.sampleSize), SAMPLE_SALT, vLeaves, V_SALT);
+    function _share(uint256 id, uint256 slot) internal {
+        vm.prank(client);
+        market.shareRange(id, slot, hex"aa01");
+    }
+
+    function _shareAll(uint256 id) internal {
+        uint256 nv = _verifiers(id).length;
+        for (uint256 slot = 0; slot < nv; slot++) {
+            _share(id, slot);
+        }
+    }
+
+    /// Verifier `slot` commits to its range of `vLeaves` (a full-length array).
+    function _commitV(uint256 id, uint256 slot, bytes32[] memory vLeaves) internal {
+        (uint256 s, uint256 e) = market.rangeOf(id, slot);
+        vm.prank(_verifiers(id)[slot]);
+        market.commitCheck(id, _checkCommit(_slice(vLeaves, s, e)));
+    }
+
+    function _revealV(uint256 id, uint256 slot, bytes32[] memory vLeaves) internal {
+        (uint256 s, uint256 e) = market.rangeOf(id, slot);
+        vm.prank(_verifiers(id)[slot]);
+        market.revealCheck(id, _slice(vLeaves, s, e), V_SALT);
     }
 
     function _publish(uint256 id, bytes32[] memory leaves) internal {
@@ -215,25 +231,37 @@ abstract contract DeGPUBase is Test {
         market.submitTiebreak(id, leaves);
     }
 
-    /// Create, accept, share, both commit and V reveal: the job ends in Publishing.
-    function _toPublishing(address main, bytes32[] memory mLeaves, bytes32[] memory vLeaves)
+    /// Create, accept, commit and reveal "no": the job ends in Publishing.
+    function _toPublishingUnverified(address main, bytes32[] memory mLeaves) internal returns (uint256 id) {
+        id = _create(main, N, false);
+        _accept(id);
+        _commitM(id, mLeaves);
+        _decide(id, false);
+    }
+
+    /// Create, accept, commit, reveal "yes", share, both verifiers commit and reveal: ends in Publishing.
+    /// `v0` and `v1` are full-length arrays; each verifier uses its own range of its array.
+    function _toPublishingVerified(address main, bytes32[] memory mLeaves, bytes32[] memory v0, bytes32[] memory v1)
         internal
         returns (uint256 id)
     {
-        id = _create(main, N, K);
+        id = _create(main, N, true);
         _accept(id);
-        _share(id);
         _commitM(id, mLeaves);
-        _commitV(id, vLeaves);
-        _reveal(id, vLeaves);
+        _decide(id, true);
+        _shareAll(id);
+        _commitV(id, 0, v0);
+        _commitV(id, 1, v1);
+        _revealV(id, 0, v0);
+        _revealV(id, 1, v1);
     }
 
     /// Full verified flow up to and including M's publishResults.
-    function _runVerified(address main, bytes32[] memory mLeaves, bytes32[] memory vLeaves)
+    function _runVerified(address main, bytes32[] memory mLeaves, bytes32[] memory v0, bytes32[] memory v1)
         internal
         returns (uint256 id)
     {
-        id = _toPublishing(main, mLeaves, vLeaves);
+        id = _toPublishingVerified(main, mLeaves, v0, v1);
         _publish(id, mLeaves);
     }
 
@@ -280,7 +308,7 @@ abstract contract DeGPUBase is Test {
     }
 
     /// Checks shared by every closed job: status/outcome, nobody still locked, the market holds no ETH,
-    /// value is conserved, and Payout events add up to escrow + slashes.
+    /// value is conserved, and Payout events add up to the deposit plus all slashes.
     function _assertClosed(uint256 id, JobMarket.Outcome outcome) internal view {
         JobMarket.Job memory j = _job(id);
         assertEq(uint8(j.status), uint8(JobMarket.Status.Closed), "status");
@@ -304,14 +332,14 @@ abstract contract DeGPUBase is Test {
             if (logs[i].topics[0] == PAYOUT_SIG) paid += abi.decode(logs[i].data, (uint256));
             if (logs[i].topics[0] == SLASHED_SIG) slashed += abi.decode(logs[i].data, (uint256));
         }
-        assertEq(paid, j.price + j.fee + slashed, "payout events");
+        assertEq(paid, 2 * j.price + slashed, "payout events");
     }
 
     /// Make every provider except the given ones inactive by withdrawing below minStake.
-    function _deactivateAllBut(address keep1, address keep2) internal {
+    function _deactivateAllBut(address keep1, address keep2, address keep3) internal {
         for (uint256 i = 0; i < providers.length; i++) {
             address p = providers[i];
-            if (p == keep1 || p == keep2) continue;
+            if (p == keep1 || p == keep2 || p == keep3) continue;
             vm.prank(p);
             registry.withdrawStake(0.5 ether);
             assertFalse(registry.isActive(p));

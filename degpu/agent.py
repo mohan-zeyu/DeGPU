@@ -4,19 +4,19 @@ A ``ProviderAgent`` registers in the ProviderRegistry with a stake, a price per
 item and its own X25519 public key. Each ``step()`` it
 
 1. polls new JobMarket events to find jobs it takes part in (as main provider
-   M, as the randomly drawn verifier V or as the tie-breaker T) and to pick up
-   the sealed payloads addressed to it, then
+   M, as one of the randomly drawn verifiers or as the tie-breaker T) and to
+   pick up the sealed payloads addressed to it, then
 2. reads each of its open jobs with ``getJob`` and does the next action of its
-   role (docs/INTERFACE.md section 7):
+   role (docs/INTERFACE.md v2, section 7):
 
    * **main**: unseal ``k_job``; check the task type's runner hash against the
      local runner; fetch the manifest, check it against ``dataHash`` and check
      every decrypted file against its manifest hash; ``accept``; run all N
-     items; ``commitResults`` if the job is verified; ``publishResults`` once
-     the job is in the Publishing phase.
-   * **verifier**: wait for ``SampleShared``; unseal it; check ``sampleHash``
-     and the sampled inputs (``reportBadInput`` on a mismatch); run only the
-     sample; ``commitSample``; ``revealSample`` in the SampleReveal phase.
+     items; ``commitResults`` (always: M never knows whether the job will be
+     verified); ``publishResults`` once the job is in the Publishing phase.
+   * **verifier**: wait for its ``RangeShared``; unseal it; check the range and
+     the inputs (``reportBadInput`` on a mismatch); run its share of the items;
+     ``commitCheck``; ``revealCheck`` in the CheckReveal phase.
    * **tie-breaker**: wait for ``TiebreakShared``; unseal it; check the inputs
      (``reportBadInput`` on a mismatch); run only the mismatched items;
      ``submitTiebreak``.
@@ -49,10 +49,10 @@ from degpu.chain import (
     PROVIDER_STAKE,
     REPO_ROOT,
     TASK_NAME,
-    ZERO32,
     Chain,
     Status,
     TxFailed,
+    VState,
 )
 from degpu.storage import Store
 from degpu.tasks.image_classify_v1.runner import NUM_CLASSES, Runner, runner_hash
@@ -179,11 +179,12 @@ class ProviderAgent:
             # setdefault: a re-scan (e.g. after a daemon restart) never wipes a job's progress
             if name == "JobCreated" and a["main"] == me and job_id not in self.jobs:
                 self.jobs[job_id] = {"role": "main", "sealed": _hex(a["sealedForMain"])}
-                self.log(f"job {job_id}: offered as main ({a['numItems']} items, sample {a['sampleSize']})")
-            elif name == "JobAccepted" and a["verifier"] == me and job_id not in self.jobs:
-                self.jobs[job_id] = {"role": "verifier"}
-                self.log(f"job {job_id}: drawn as verifier")
-            elif name == "SampleShared" and a["verifier"] == me and job_id in self.jobs:
+                self.log(f"job {job_id}: offered as main ({a['numItems']} items, verification unknown)")
+            elif name == "VerifiersDrawn" and me in a["verifiers"] and job_id not in self.jobs:
+                slot = list(a["verifiers"]).index(me)
+                self.jobs[job_id] = {"role": "verifier", "slot": slot}
+                self.log(f"job {job_id}: drawn as verifier (slot {slot})")
+            elif name == "RangeShared" and a["verifier"] == me and job_id in self.jobs:
                 self.jobs[job_id].setdefault("sealed", _hex(a["sealedForVerifier"]))
             elif name == "TiebreakStarted" and a["tiebreaker"] == me and job_id not in self.jobs:
                 self.jobs[job_id] = {"role": "tiebreaker", "mismatched": list(a["mismatched"])}
@@ -247,11 +248,11 @@ class ProviderAgent:
                 self.log(f"job {job_id}: goes offline")
             return False
 
-        if "labels" not in st and job.status in (Status.COMMITTING, Status.SAMPLE_REVEAL, Status.PUBLISHING):
+        if "labels" not in st and job.status in (Status.COMMITTING, Status.PUBLISHING):
             self._compute_main(job_id, st, job)
             return True
 
-        if job.status == Status.COMMITTING and bytes(job.resultsCommit) == ZERO32:
+        if job.status == Status.COMMITTING:
             leaves = self._leaves(st, range(job.numItems))
             self.chain.send(m.commitResults(job_id, crypto.results_commit(leaves)), self.account)
             self.log(f"job {job_id}: committed results")
@@ -290,22 +291,21 @@ class ProviderAgent:
 
     def _act_verifier(self, job_id: int, st: dict, job) -> bool:
         m = self.chain.market.functions
+        slot = st["slot"]
+        my_state = VState(job.vstate[slot])
         if (
-            job.status == Status.COMMITTING
-            and job.sampleShared
-            and bytes(job.sampleCommit) == ZERO32
+            job.status == Status.CHECKING
+            and my_state == VState.SHARED
             and not st.get("committed")
             and not st.get("reported")
             and "sealed" in st
         ):
+            start, end = self.chain.range_of(job_id, slot)
+            indices = list(range(start, end))
             try:
                 payload = crypto.unseal(self.priv, _unhex(st["sealed"]))
-                sample_salt = _unhex(payload["sample_salt"])
-                indices = [int(i) for i in payload["indices"]]
-                if len(indices) != job.sampleSize:
-                    raise InputError("sample has the wrong size")
-                if crypto.sample_hash(sample_salt, indices) != bytes(job.sampleHash):
-                    raise InputError("sample does not match sampleHash")
+                if (int(payload["start"]), int(payload["end"])) != (start, end):
+                    raise InputError("shared range differs from the on-chain range")
                 self._check_runner(job)
                 keys = self._item_keys(payload, indices)
                 model, images = self._load_inputs(job, _unhex(payload["model_key"]), keys)
@@ -317,33 +317,23 @@ class ProviderAgent:
 
             if self.behavior == "liar":
                 labels = [self.rng.randrange(NUM_CLASSES) for _ in indices]
-                self.log(f"job {job_id}: making up {len(indices)} random sample labels")
+                self.log(f"job {job_id}: making up {len(indices)} random labels for items {start}-{end - 1}")
             else:
                 labels = self._runner(model).classify([images[i] for i in indices])
-                self.log(f"job {job_id}: ran the {len(indices)} sampled items")
-            st.update(
-                job_salt=payload["job_salt"],
-                sample_salt=_hex(sample_salt),
-                indices=indices,
-                labels=labels,
-                v_salt=_hex(os.urandom(32)),
-            )
+                self.log(f"job {job_id}: ran items {start}-{end - 1}")
+            st.update(job_salt=payload["job_salt"], indices=indices, labels=labels, v_salt=_hex(os.urandom(32)))
             leaves = self._leaves(st, indices)
-            commit = crypto.sample_commit(_unhex(st["v_salt"]), leaves)
-            self.chain.send(m.commitSample(job_id, commit), self.account)
+            commit = crypto.check_commit(_unhex(st["v_salt"]), leaves)
+            self.chain.send(m.commitCheck(job_id, commit), self.account)
             st["committed"] = True
-            self.log(f"job {job_id}: committed sample")
+            self.log(f"job {job_id}: committed its check")
             return True
 
-        if job.status == Status.SAMPLE_REVEAL and st.get("committed") and not st.get("revealed"):
-            indices = st["indices"]
-            leaves = self._leaves(st, indices)
-            self.chain.send(
-                m.revealSample(job_id, indices, _unhex(st["sample_salt"]), leaves, _unhex(st["v_salt"])),
-                self.account,
-            )
+        if job.status == Status.CHECK_REVEAL and my_state == VState.COMMITTED and not st.get("revealed"):
+            leaves = self._leaves(st, st["indices"])
+            self.chain.send(m.revealCheck(job_id, leaves, _unhex(st["v_salt"])), self.account)
             st["revealed"] = True
-            self.log(f"job {job_id}: revealed sample")
+            self.log(f"job {job_id}: revealed its check")
             return True
         return False
 

@@ -12,11 +12,13 @@ import {JobMarket} from "../src/JobMarket.sol";
 contract Deploy is Script {
     uint256 public constant MIN_STAKE = 0.8 ether;
 
-    /// The demo parameters of INTERFACE.md section 7.
+    /// The demo parameters of INTERFACE.md (v2) section 7.
     function demoParams() public pure returns (JobMarket.Params memory) {
         return JobMarket.Params({
             acceptWindow: 300,
             computeWindow: 600,
+            decideWindow: 300,
+            checkWindow: 600,
             revealWindow: 300,
             publishWindow: 300,
             tiebreakWindow: 600,
@@ -24,7 +26,8 @@ contract Deploy is Script {
             wrongSlashBps: 3000,
             missedSlashBps: 1000,
             checkMissedSlashBps: 500,
-            maxMismatch: 0
+            maxMismatch: 0,
+            numVerifiers: 2
         });
     }
 

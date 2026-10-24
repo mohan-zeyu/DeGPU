@@ -17,6 +17,7 @@ from degpu.chain import (
     PRICE_PER_ITEM,
     PROVIDER_INDICES,
     PROVIDER_NAMES,
+    Drop,
     Outcome,
     Status,
     start_local_chain,
@@ -95,45 +96,49 @@ def test_unverified_job(world, local_labels):
         ag.behavior = "honest"
     a = world.agents["A"]
     before = world.snapshot()
-    job_id = world.client.post(a.account, MODEL, IMAGES, 0)
+    job_id = world.client.post(a.account, MODEL, IMAGES, False)
     job = world.drive(job_id)
 
     assert job.outcome == Outcome.DELIVERED
+    assert not job.verify and len(job.verifiers) == 0
     assert world.client.results(job_id) == local_labels
     price = len(IMAGES) * PRICE_PER_ITEM
     d = world.deltas(before)
-    assert d[world.client.account] == (-price, 0)
+    assert d[world.client.account] == (-price, 0)  # deposited 2 x price, half refunded
     assert d[a.account] == (price, 0)
     assert world.chain.balance(world.chain.market.address) == 0
 
 
 def test_verified_job_cheater_caught(world, local_labels):
-    """E fakes 20% of its labels; a full sample (rate 1.0) makes detection certain."""
+    """E fakes 20% of its labels; two verifiers re-run every item, so every fake is caught."""
     for ag in world.agents.values():
         ag.behavior = "honest"
     e = world.agents["E"]
     e.behavior = "cheat"
     before = world.snapshot()
-    job_id = world.client.post(e.account, MODEL, IMAGES, 1.0)
+    job_id = world.client.post(e.account, MODEL, IMAGES, True)
     job = world.drive(job_id)
 
     assert job.outcome == Outcome.MAIN_OUTVOTED
+    assert len(job.verifiers) == 2
     faked = e.jobs[job_id]["cheated"]
     assert len(faked) == 4
-    assert [int(i) for i in job.mismatched] == faked  # every faked item was sampled and caught
+    assert [int(i) for i in job.mismatched] == faked  # every faked item was caught
 
     # The client can still decode M's (partly fake) labels; they differ exactly on the faked items.
     labels = world.client.results(job_id)
     assert [i for i, (x, y) in enumerate(zip(labels, local_labels)) if x != y] == faked
 
     n = len(IMAGES)
-    price = fee = n * PRICE_PER_ITEM  # 0.002 ETH each (full sample)
+    price = n * PRICE_PER_ITEM  # 0.002 ETH
+    half = price // 2  # each verifier covers 10 items
     slash = 3 * ETHER // 10  # 30% of E's 1 ETH stake
     tf = 2 * ETHER // 1000  # tie-breaker fee
     d = world.deltas(before)
-    assert d[world.client.account] == (price + slash - tf - (price + fee), 0)  # +0.296 ETH
+    assert d[world.client.account] == (slash - 2 * half - tf, 0)  # +0.296 ETH
     assert d[e.account] == (0, -slash)
-    assert d[job.verifier] == (fee, 0)
+    for v in job.verifiers:
+        assert d[v] == (half, 0)
     assert d[job.tiebreaker] == (tf, 0)
     assert world.chain.balance(world.chain.market.address) == 0
     assert not world.chain.registry.functions.isActive(e.account).call()
@@ -148,7 +153,7 @@ def test_main_refuses_inputs_not_matching_data_hash(world, monkeypatch):
     before = world.snapshot()
     with monkeypatch.context() as m:
         m.setattr(crypto, "data_hash", lambda model_hash, item_hashes: b"\x01" * 32)
-        job_id = world.client.post(b.account, MODEL, IMAGES[:3], 0)
+        job_id = world.client.post(b.account, MODEL, IMAGES[:3], False)
     job = world.drive(job_id)
     assert job.status == Status.OPEN
     assert "dataHash" in b.jobs[job_id]["refused"]
@@ -159,3 +164,27 @@ def test_main_refuses_inputs_not_matching_data_hash(world, monkeypatch):
     d = world.deltas(before)
     assert d[world.client.account] == (0, 0)  # full refund (net of gas)
     assert d[b.account] == (0, 0)
+
+
+def test_client_never_reveals_counts_as_unverified(world, local_labels):
+    """The client sits on its decision: after the decide deadline anyone can expire() the job,
+    which then finishes unverified."""
+    for ag in world.agents.values():
+        ag.behavior = "honest"
+    c = world.agents["C"]
+    before = world.snapshot()
+    job_id = world.client.post(c.account, MODEL, IMAGES, True, reveal=False)
+    job = world.drive(job_id)
+    assert job.status == Status.DECIDING  # M committed; the decision stays hidden
+
+    world.chain.increase_time(job.deadline - world.chain.now() + 1)
+    world.chain.mine()
+    world.client.expire(job_id)
+    job = world.drive(job_id)
+    assert job.outcome == Outcome.DELIVERED
+    assert job.drop == Drop.CLIENT_NO_REVEAL
+    assert world.client.results(job_id) == local_labels
+    price = len(IMAGES) * PRICE_PER_ITEM
+    d = world.deltas(before)
+    assert d[world.client.account] == (-price, 0)
+    assert d[c.account] == (price, 0)

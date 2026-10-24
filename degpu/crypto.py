@@ -32,8 +32,8 @@ __all__ = [
     "item_key",
     "leaf",
     "results_commit",
-    "sample_hash",
-    "sample_commit",
+    "verify_commit",
+    "check_commit",
     "data_hash",
     "generate_keypair",
     "seal",
@@ -99,13 +99,13 @@ def results_commit(leaves: list[bytes]) -> bytes:
     return keccak(abi_encode(["bytes32[]"], [list(leaves)]))
 
 
-def sample_hash(sample_salt: bytes, indices: list[int]) -> bytes:
-    """keccak256(abi.encode(bytes32 sampleSalt, uint256[] indices))."""
-    return keccak(abi_encode(["bytes32", "uint256[]"], [sample_salt, list(indices)]))
+def verify_commit(verify_salt: bytes, verify: bool) -> bytes:
+    """keccak256(abi.encode(bytes32 verifySalt, bool verify)): the client's hidden yes/no."""
+    return keccak(abi_encode(["bytes32", "bool"], [verify_salt, bool(verify)]))
 
 
-def sample_commit(v_salt: bytes, leaves: list[bytes]) -> bytes:
-    """keccak256(abi.encode(bytes32 vSalt, bytes32[] sampleLeaves))."""
+def check_commit(v_salt: bytes, leaves: list[bytes]) -> bytes:
+    """keccak256(abi.encode(bytes32 vSalt, bytes32[] rangeLeaves)) over a verifier's range."""
     return keccak(abi_encode(["bytes32", "bytes32[]"], [v_salt, list(leaves)]))
 
 

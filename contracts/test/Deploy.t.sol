@@ -29,6 +29,8 @@ contract DeployTest is Test {
         JobMarket.Params memory p = market.params();
         assertEq(p.acceptWindow, 300);
         assertEq(p.computeWindow, 600);
+        assertEq(p.decideWindow, 300);
+        assertEq(p.checkWindow, 600);
         assertEq(p.revealWindow, 300);
         assertEq(p.publishWindow, 300);
         assertEq(p.tiebreakWindow, 600);
@@ -37,5 +39,6 @@ contract DeployTest is Test {
         assertEq(p.missedSlashBps, 1000);
         assertEq(p.checkMissedSlashBps, 500);
         assertEq(p.maxMismatch, 0);
+        assertEq(p.numVerifiers, 2);
     }
 }

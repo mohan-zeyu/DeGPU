@@ -5,31 +5,32 @@ import {DeGPUBase} from "./DeGPUBase.t.sol";
 import {JobMarket} from "../src/JobMarket.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 
-/// @notice One test per row of the "Settlement on close" table (INTERFACE.md section 7).
-///         Every job uses N = 200, k = 20 (price 0.02 ETH, fee 0.002 ETH) unless noted.
-///         Balance deltas are measured from just before createJob, so the client's delta includes
-///         what it paid in.
+/// @notice One test (or more) per settlement case of INTERFACE.md (v2) section 7, with exact payouts,
+///         stake changes and stats. Demo numbers: price 0.02, deposit 0.04, 0.01 per verifier,
+///         slash 0.3 (wrong) / 0.1 (main missed) / 0.05 (check missed), tie-breaker fee 0.002.
 contract SettlementTest is DeGPUBase {
-    // Stats shorthands
-    ProviderRegistry.Stat constant VERIFIED = ProviderRegistry.Stat.VerifiedCompleted;
-    ProviderRegistry.Stat constant UNVERIFIED = ProviderRegistry.Stat.UnverifiedCompleted;
-    ProviderRegistry.Stat constant MISSED = ProviderRegistry.Stat.Missed;
-    ProviderRegistry.Stat constant OUTVOTED = ProviderRegistry.Stat.Outvoted;
-    ProviderRegistry.Stat constant CHECKS_DONE = ProviderRegistry.Stat.ChecksCompleted;
-    ProviderRegistry.Stat constant CHECKS_MISSED = ProviderRegistry.Stat.ChecksMissed;
-    ProviderRegistry.Stat constant CHECKS_OUTVOTED = ProviderRegistry.Stat.ChecksOutvoted;
+    // Item 5 is in verifier slot 0's range [0, 100), item 150 in slot 1's range [100, 200).
+    uint256 constant I0 = 5;
+    uint256 constant I1 = 150;
 
-    function _allStats(address p) internal view returns (uint256 sum) {
-        for (uint8 s = 0; s < 7; s++) {
-            sum += registry.statOf(p, ProviderRegistry.Stat(s));
+    function _honestAt(uint256[] memory idx) internal pure returns (bytes32[] memory l) {
+        l = new bytes32[](idx.length);
+        for (uint256 x = 0; x < idx.length; x++) {
+            l[x] = _leaf(idx[x], _label(idx[x]));
         }
     }
 
-    /// Everybody not listed must be untouched (balance, stake, stats).
-    function _assertUntouched(address p) internal view {
-        assertEq(_dBal(p), 0, "untouched balance");
-        assertEq(_dStake(p), 0, "untouched stake");
-        assertEq(_allStats(p), 0, "untouched stats");
+    function _withWrong(uint256 i, uint256 delta) internal pure returns (bytes32[] memory l) {
+        l = _honest(N);
+        l[i] = _wrong(i, delta);
+    }
+
+    function _redeployWith(JobMarket.Params memory p) internal {
+        _deploy(p);
+        for (uint256 i = 0; i < providers.length; i++) {
+            vm.prank(providers[i]);
+            registry.register{value: STAKE}(bytes32(i + 1), PPI);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -38,226 +39,117 @@ contract SettlementTest is DeGPUBase {
 
     function test_Cancelled_ByClient() public {
         _snap();
-        uint256 id = _create(A, N, K);
-        assertEq(address(market).balance, PRICE + FEE);
-
-        vm.expectEmit(true, true, false, true, address(market));
-        emit JobMarket.Payout(id, client, PRICE + FEE);
-        vm.expectEmit(true, false, false, true, address(market));
-        emit JobMarket.JobClosed(id, JobMarket.Outcome.Cancelled);
+        uint256 id = _create(A, N, true);
+        assertEq(address(market).balance, DEPOSIT);
         vm.prank(client);
         market.cancel(id);
-
         _assertClosed(id, JobMarket.Outcome.Cancelled);
         assertEq(_dBal(client), 0);
-        _assertUntouched(A);
     }
 
     function test_Cancelled_ByExpire() public {
         _snap();
-        uint256 id = _create(A, N, K);
+        uint256 id = _create(A, N, false);
         _pastDeadline(id);
         vm.prank(stranger);
         market.expire(id);
         _assertClosed(id, JobMarket.Outcome.Cancelled);
         assertEq(_dBal(client), 0);
-        _assertUntouched(A);
     }
 
-    function test_Cancelled_ByAnyoneAfterDeadline() public {
+    // ------------------------------------------------------------------
+    // Unverified: Delivered
+    // ------------------------------------------------------------------
+
+    function test_Delivered_DecisionNo() public {
         _snap();
-        uint256 id = _create(A, N, K);
+        bytes32[] memory l = _honest(N);
+        uint256 id = _toPublishingUnverified(A, l);
+        assertEq(_verifiers(id).length, 0);
+        assertTrue(_job(id).decided);
+        assertFalse(_job(id).verify);
+        _publish(id, l);
+        _assertClosed(id, JobMarket.Outcome.Delivered);
+        assertEq(_dBal(client), -_i(PRICE)); // the unused fee half of the deposit comes back
+        assertEq(_dBal(A), _i(PRICE));
+        assertEq(_stat(A, ProviderRegistry.Stat.UnverifiedCompleted), 1);
+        assertEq(_stat(A, ProviderRegistry.Stat.VerifiedCompleted), 0);
+    }
+
+    function test_Delivered_ClientNoReveal() public {
+        _snap();
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, true);
+        _accept(id);
+        _commitM(id, l);
         _pastDeadline(id);
-        vm.prank(stranger);
-        market.cancel(id);
-        _assertClosed(id, JobMarket.Outcome.Cancelled);
-        assertEq(_dBal(client), 0);
-    }
-
-    // ------------------------------------------------------------------
-    // Delivered
-    // ------------------------------------------------------------------
-
-    function test_Delivered_NoSample() public {
-        _snap();
-        uint256 id = _create(A, N, 0);
-        address v = _accept(id);
-        assertEq(v, address(0));
-        assertEq(_locks(A), 1);
+        market.expire(id);
         JobMarket.Job memory j = _job(id);
         assertEq(uint8(j.status), uint8(JobMarket.Status.Publishing));
-        assertEq(j.deadline, block.timestamp + 600); // computeWindow
-        assertEq(j.fee, 0);
-
-        _publish(id, _honest(N));
-
+        assertEq(uint8(j.drop), uint8(JobMarket.Drop.ClientNoReveal));
+        assertFalse(j.verify);
+        _publish(id, l);
         _assertClosed(id, JobMarket.Outcome.Delivered);
-        assertEq(uint8(_job(id).drop), uint8(JobMarket.Drop.None));
         assertEq(_dBal(client), -_i(PRICE));
         assertEq(_dBal(A), _i(PRICE));
-        assertEq(_stat(A, UNVERIFIED), 1);
-        assertEq(_allStats(A), 1);
     }
 
     function test_Delivered_NoEligibleVerifier() public {
-        _deactivateAllBut(A, address(0));
+        _deactivateAllBut(A, B, address(0)); // only B could verify, but 2 are needed
         _snap();
-        uint256 id = _create(A, N, K);
-
-        vm.expectEmit(true, false, false, true, address(market));
-        emit JobMarket.VerificationDropped(id, JobMarket.Drop.NoEligibleVerifier);
-        address v = _accept(id);
-
-        assertEq(v, address(0));
-        JobMarket.Job memory j = _job(id);
-        assertEq(uint8(j.drop), uint8(JobMarket.Drop.NoEligibleVerifier));
-        assertEq(uint8(j.status), uint8(JobMarket.Status.Publishing));
-        assertEq(j.deadline, block.timestamp + 600); // computeWindow
-
-        _publish(id, _honest(N));
-
-        _assertClosed(id, JobMarket.Outcome.Delivered);
-        assertEq(_dBal(client), -_i(PRICE)); // fee refunded
-        assertEq(_dBal(A), _i(PRICE));
-        assertEq(_stat(A, UNVERIFIED), 1);
-    }
-
-    function test_Delivered_ClientNoShare() public {
-        bytes32[] memory leaves = _honest(N);
-        _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _commitM(id, leaves);
-        // the client never shares the sample
-        _pastDeadline(id);
-        market.expire(id);
-
-        JobMarket.Job memory j = _job(id);
-        assertEq(uint8(j.drop), uint8(JobMarket.Drop.ClientNoShare));
-        assertEq(uint8(j.status), uint8(JobMarket.Status.Publishing));
-        assertEq(j.deadline, block.timestamp + 300); // publishWindow
-        assertEq(_locks(v), 1); // V stays locked until close
-
-        _publish(id, leaves);
-
-        _assertClosed(id, JobMarket.Outcome.Delivered);
-        assertEq(_dBal(client), -_i(PRICE + FEE)); // fee forfeited to V
-        assertEq(_dBal(A), _i(PRICE));
-        assertEq(_dBal(v), _i(FEE));
-        assertEq(_stat(A, UNVERIFIED), 1);
-        assertEq(_allStats(v), 0);
-    }
-
-    function test_Delivered_BadInput() public {
-        _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _share(id);
-
-        vm.prank(v);
-        market.reportBadInput(id);
-
-        JobMarket.Job memory j = _job(id);
-        assertEq(uint8(j.drop), uint8(JobMarket.Drop.BadInput));
-        assertEq(uint8(j.status), uint8(JobMarket.Status.Publishing));
-        assertEq(j.deadline, block.timestamp + 600); // computeWindow
-        assertEq(_locks(v), 0); // V unlocked right away
-
-        _publish(id, _honest(N)); // M had not committed: no commitment to check
-
-        _assertClosed(id, JobMarket.Outcome.Delivered);
-        assertEq(_dBal(client), -_i(PRICE)); // fee refunded
-        assertEq(_dBal(A), _i(PRICE));
-        assertEq(_stat(A, UNVERIFIED), 1);
-        _assertUntouched(v);
-    }
-
-    function test_Delivered_BadInput_AfterMainCommitted() public {
-        bytes32[] memory leaves = _honest(N);
-        _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _commitM(id, leaves);
-        _share(id);
-        vm.prank(v);
-        market.reportBadInput(id);
-        // M's commitment still binds its published leaves
-        bytes32[] memory other = _honest(N);
-        other[5] = _wrong(5, 1);
-        vm.prank(A);
-        vm.expectRevert(bytes("resultsCommit mismatch"));
-        market.publishResults(id, other);
-
-        _publish(id, leaves);
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, true);
+        _accept(id);
+        _commitM(id, l);
+        address[] memory vs = _decide(id, true);
+        assertEq(vs.length, 0);
+        assertEq(uint8(_job(id).drop), uint8(JobMarket.Drop.NoEligibleVerifier));
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Publishing));
+        _publish(id, l);
         _assertClosed(id, JobMarket.Outcome.Delivered);
         assertEq(_dBal(client), -_i(PRICE));
         assertEq(_dBal(A), _i(PRICE));
-        _assertUntouched(v);
     }
 
-    function test_Delivered_VerifierMissed_InCommitting() public {
-        bytes32[] memory leaves = _honest(N);
+    function test_Delivered_AllVerifiersBadInput() public {
         _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _share(id);
-        _commitM(id, leaves);
-        // V never commits
-        _pastDeadline(id);
-
-        vm.expectEmit(true, true, false, true, address(market));
-        emit JobMarket.ProviderSlashed(id, v, SLASH_CHECK);
-        market.expire(id);
-
-        JobMarket.Job memory j = _job(id);
-        assertEq(uint8(j.drop), uint8(JobMarket.Drop.VerifierMissed));
-        assertEq(uint8(j.status), uint8(JobMarket.Status.Publishing));
-        assertEq(j.deadline, block.timestamp + 300); // publishWindow
-        assertEq(j.verifierSlash, SLASH_CHECK);
-        assertEq(address(market).balance, PRICE + FEE + SLASH_CHECK);
-        assertEq(_locks(v), 0);
-
-        _publish(id, leaves);
-
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, true);
+        _accept(id);
+        _commitM(id, l);
+        address[] memory vs = _decide(id, true);
+        _shareAll(id);
+        vm.prank(vs[0]);
+        market.reportBadInput(id);
+        assertEq(_locks(vs[0]), 0); // unlocked right away
+        vm.prank(vs[1]);
+        market.reportBadInput(id);
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Publishing));
+        _publish(id, l);
         _assertClosed(id, JobMarket.Outcome.Delivered);
-        assertEq(_dBal(client), -_i(PRICE) + _i(SLASH_CHECK)); // fee + V's slash back
-        assertEq(_dBal(A), _i(PRICE));
-        assertEq(_dBal(v), 0);
-        assertEq(_dStake(v), -_i(SLASH_CHECK));
-        assertEq(_stat(A, UNVERIFIED), 1);
-        assertEq(_stat(v, CHECKS_MISSED), 1);
-        assertEq(_allStats(v), 1);
+        assertEq(_dBal(client), -_i(PRICE));
+        assertEq(_dBal(vs[0]), 0);
+        assertEq(_dBal(vs[1]), 0);
+        assertEq(_dStake(vs[0]), 0);
     }
 
-    function test_Delivered_VerifierMissed_InSampleReveal() public {
-        bytes32[] memory leaves = _honest(N);
-        bytes32[] memory vLeaves = _pick(leaves, _indices(N, K));
+    function test_Delivered_ClientSharesNothing() public {
         _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _share(id);
-        _commitM(id, leaves);
-        _commitV(id, vLeaves);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.SampleReveal));
-        assertEq(_job(id).deadline, block.timestamp + 300); // revealWindow
-        // V never reveals
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, true);
+        _accept(id);
+        _commitM(id, l);
+        address[] memory vs = _decide(id, true);
         _pastDeadline(id);
-        market.expire(id);
-
-        JobMarket.Job memory j = _job(id);
-        assertEq(uint8(j.drop), uint8(JobMarket.Drop.VerifierMissed));
-        assertEq(uint8(j.status), uint8(JobMarket.Status.Publishing));
-        assertEq(j.verifierSlash, SLASH_CHECK);
-
-        _publish(id, leaves);
-
+        market.expire(id); // both slots -> NoShare, nothing to reveal -> Publishing
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Publishing));
+        _publish(id, l);
         _assertClosed(id, JobMarket.Outcome.Delivered);
-        assertEq(_dBal(client), -_i(PRICE) + _i(SLASH_CHECK));
-        assertEq(_dBal(A), _i(PRICE));
-        assertEq(_dBal(v), 0);
-        assertEq(_dStake(v), -_i(SLASH_CHECK));
-        assertEq(_stat(A, UNVERIFIED), 1);
-        assertEq(_stat(v, CHECKS_MISSED), 1);
+        // the client forfeits both verifier fees
+        assertEq(_dBal(client), -_i(DEPOSIT));
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dBal(vs[1]), _i(HALF_FEE));
+        assertEq(_stat(A, ProviderRegistry.Stat.UnverifiedCompleted), 1);
     }
 
     // ------------------------------------------------------------------
@@ -265,49 +157,122 @@ contract SettlementTest is DeGPUBase {
     // ------------------------------------------------------------------
 
     function test_Verified() public {
-        bytes32[] memory leaves = _honest(N);
-        bytes32[] memory vLeaves = _pick(leaves, _indices(N, K));
         _snap();
-        uint256 id = _toPublishing(A, leaves, vLeaves);
-        address v = _job(id).verifier;
-
-        vm.expectEmit(true, true, false, true, address(market));
-        emit JobMarket.Payout(id, A, PRICE);
-        vm.expectEmit(true, true, false, true, address(market));
-        emit JobMarket.Payout(id, v, FEE);
-        vm.expectEmit(true, false, false, true, address(market));
-        emit JobMarket.JobClosed(id, JobMarket.Outcome.Verified);
-        _publish(id, leaves);
-
+        bytes32[] memory l = _honest(N);
+        uint256 id = _runVerified(A, l, l, l);
+        address[] memory vs = _verifiers(id);
         _assertClosed(id, JobMarket.Outcome.Verified);
-        assertEq(_dBal(client), -_i(PRICE + FEE));
+        assertEq(_dBal(client), -_i(DEPOSIT));
         assertEq(_dBal(A), _i(PRICE));
-        assertEq(_dBal(v), _i(FEE));
-        assertEq(_stat(A, VERIFIED), 1);
-        assertEq(_stat(v, CHECKS_DONE), 1);
-        assertEq(_allStats(A) + _allStats(v), 2);
-        // revealSample stored the sample
-        assertEq(_job(id).sampleIndices.length, K);
-        assertEq(_job(id).verifierLeaves.length, K);
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dBal(vs[1]), _i(HALF_FEE));
+        assertEq(_stat(A, ProviderRegistry.Stat.VerifiedCompleted), 1);
+        assertEq(_stat(vs[0], ProviderRegistry.Stat.ChecksCompleted), 1);
+        assertEq(_stat(vs[1], ProviderRegistry.Stat.ChecksCompleted), 1);
+        // every item was checked: each verifier's range is stored
+        assertEq(market.checkLeafOf(id, 0), l[0]);
+        assertEq(market.checkLeafOf(id, N - 1), l[N - 1]);
     }
 
-    /// With maxMismatch = 1, a single disagreement still counts as Verified.
     function test_Verified_WithinMaxMismatch() public {
         JobMarket.Params memory p = demoParams();
         p.maxMismatch = 1;
-        _deploy(p);
-        for (uint256 i = 0; i < providers.length; i++) {
-            vm.prank(providers[i]);
-            registry.register{value: STAKE}(bytes32(i + 1), PPI);
-        }
-        bytes32[] memory leaves = _honest(N);
-        bytes32[] memory vLeaves = _pick(leaves, _indices(N, K));
-        vLeaves[3] = _wrong(30, 1);
+        _redeployWith(p);
         _snap();
-        uint256 id = _runVerified(A, leaves, vLeaves);
+        bytes32[] memory l = _honest(N);
+        uint256 id = _runVerified(A, l, l, _withWrong(I1, 1));
         _assertClosed(id, JobMarket.Outcome.Verified);
+        assertEq(_dBal(client), -_i(DEPOSIT));
         assertEq(_dBal(A), _i(PRICE));
-        assertEq(_dBal(_job(id).verifier), _i(FEE));
+    }
+
+    function test_Verified_OneVerifierBadInput() public {
+        _snap();
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, true);
+        _accept(id);
+        _commitM(id, l);
+        address[] memory vs = _decide(id, true);
+        _shareAll(id);
+        vm.prank(vs[1]);
+        market.reportBadInput(id);
+        _commitV(id, 0, l);
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.CheckReveal));
+        _revealV(id, 0, l);
+        _publish(id, l);
+        _assertClosed(id, JobMarket.Outcome.Verified);
+        assertEq(_dBal(client), -_i(PRICE + HALF_FEE)); // slot 1's fee comes back
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dBal(vs[1]), 0);
+        assertEq(uint8(_job(id).vstate[1]), uint8(JobMarket.VState.BadInput));
+    }
+
+    function test_Verified_OneVerifierNoShare() public {
+        _snap();
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, true);
+        _accept(id);
+        _commitM(id, l);
+        address[] memory vs = _decide(id, true);
+        _share(id, 0);
+        _commitV(id, 0, l);
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Checking)); // slot 1 still waits
+        _pastDeadline(id);
+        market.expire(id);
+        assertEq(uint8(_job(id).vstate[1]), uint8(JobMarket.VState.NoShare));
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.CheckReveal));
+        _revealV(id, 0, l);
+        _publish(id, l);
+        _assertClosed(id, JobMarket.Outcome.Verified);
+        assertEq(_dBal(client), -_i(DEPOSIT)); // the client forfeits slot 1's fee
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dBal(vs[1]), _i(HALF_FEE));
+    }
+
+    function test_Verified_OneVerifierMissedCommit() public {
+        _snap();
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, true);
+        _accept(id);
+        _commitM(id, l);
+        address[] memory vs = _decide(id, true);
+        _shareAll(id);
+        _commitV(id, 0, l);
+        _pastDeadline(id);
+        market.expire(id); // slot 1 shared but never committed -> Missed, slashed now
+        assertEq(uint8(_job(id).vstate[1]), uint8(JobMarket.VState.Missed));
+        assertEq(_job(id).slashedPool, SLASH_CHECK);
+        assertEq(_locks(vs[1]), 0);
+        _revealV(id, 0, l);
+        _publish(id, l);
+        _assertClosed(id, JobMarket.Outcome.Verified);
+        assertEq(_dBal(client), -_i(PRICE + HALF_FEE) + _i(SLASH_CHECK));
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dBal(vs[1]), 0);
+        assertEq(_dStake(vs[1]), -_i(SLASH_CHECK));
+        assertEq(_stat(vs[1], ProviderRegistry.Stat.ChecksMissed), 1);
+    }
+
+    function test_Verified_OneVerifierMissedReveal() public {
+        _snap();
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, true);
+        _accept(id);
+        _commitM(id, l);
+        address[] memory vs = _decide(id, true);
+        _shareAll(id);
+        _commitV(id, 0, l);
+        _commitV(id, 1, l);
+        _revealV(id, 0, l);
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.CheckReveal));
+        _pastDeadline(id);
+        market.expire(id);
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Publishing));
+        _publish(id, l);
+        _assertClosed(id, JobMarket.Outcome.Verified);
+        assertEq(_dBal(client), -_i(PRICE + HALF_FEE) + _i(SLASH_CHECK));
+        assertEq(_dStake(vs[1]), -_i(SLASH_CHECK));
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
     }
 
     // ------------------------------------------------------------------
@@ -315,386 +280,306 @@ contract SettlementTest is DeGPUBase {
     // ------------------------------------------------------------------
 
     function test_MainOutvoted() public {
-        bytes32[] memory honest = _honest(N);
-        bytes32[] memory mLeaves = _honest(N);
-        mLeaves[10] = _wrong(10, 1); // M cheats on a sampled item
-        bytes32[] memory vLeaves = _pick(honest, _indices(N, K));
         _snap();
-        uint256 id = _runVerified(A, mLeaves, vLeaves);
-
-        JobMarket.Job memory j = _job(id);
-        address v = j.verifier;
-        address t = j.tiebreaker;
-        assertEq(uint8(j.status), uint8(JobMarket.Status.TieBreak));
-        assertEq(j.deadline, block.timestamp + 600); // tiebreakWindow
-        assertEq(j.mismatched.length, 1);
-        assertEq(j.mismatched[0], 10);
-        assertEq(j.mainMismatchLeaves[0], mLeaves[10]);
-        assertEq(j.verifierMismatchLeaves[0], honest[10]);
-        assertEq(_locks(t), 1);
+        bytes32[] memory l = _honest(N);
+        bytes32[] memory m = _honest(N);
+        m[I0] = _wrong(I0, 1);
+        m[I1] = _wrong(I1, 1);
+        uint256 id = _runVerified(A, m, l, l);
+        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.TieBreak));
+        uint256[] memory mis = _job(id).mismatched;
+        assertEq(mis.length, 2);
+        assertEq(mis[0], I0);
+        assertEq(mis[1], I1);
+        address t = _job(id).tiebreaker;
+        address[] memory vs = _verifiers(id);
+        assertTrue(t != A && t != vs[0] && t != vs[1] && t != client);
 
         _shareTie(id);
-        bytes32[] memory tLeaves = new bytes32[](1);
-        tLeaves[0] = honest[10];
-        _submitTie(id, tLeaves);
-
+        _submitTie(id, _honestAt(mis));
         _assertClosed(id, JobMarket.Outcome.MainOutvoted);
         assertEq(_dStake(A), -_i(SLASH_WRONG));
         assertEq(_dBal(A), 0);
-        // client: paid 0.022, gets price + S_M - tf = 0.02 + 0.3 - 0.002 -> net +0.296
-        assertEq(_dBal(client), _i(PRICE + SLASH_WRONG - TIEBREAK_FEE) - _i(PRICE + FEE));
-        assertEq(_dBal(client), 0.296 ether);
-        assertEq(_dBal(v), _i(FEE));
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dBal(vs[1]), _i(HALF_FEE));
         assertEq(_dBal(t), _i(TIEBREAK_FEE));
-        assertEq(_stat(A, OUTVOTED), 1);
-        assertEq(_stat(v, CHECKS_DONE), 1);
-        assertEq(_stat(t, CHECKS_DONE), 1);
-        assertEq(_allStats(A) + _allStats(v) + _allStats(t), 3);
+        // client: deposit 0.04 + slash 0.3 - fees 0.02 - T 0.002 = 0.318 back -> net +0.278
+        assertEq(_dBal(client), _i(SLASH_WRONG) - _i(2 * HALF_FEE + TIEBREAK_FEE));
+        assertEq(_stat(A, ProviderRegistry.Stat.Outvoted), 1);
+        assertEq(_stat(t, ProviderRegistry.Stat.ChecksCompleted), 1);
+        assertFalse(registry.isActive(A)); // 0.7 < 0.8
     }
 
-    function test_VerifierOutvoted() public {
-        bytes32[] memory honest = _honest(N);
-        bytes32[] memory vLeaves = _pick(honest, _indices(N, K));
-        vLeaves[2] = _wrong(20, 7); // V lies about item 20
+    function test_VerifierOutvoted_One() public {
         _snap();
-        uint256 id = _runVerified(A, honest, vLeaves);
-
-        JobMarket.Job memory j = _job(id);
-        address v = j.verifier;
-        address t = j.tiebreaker;
-        assertEq(j.mismatched.length, 1);
-        assertEq(j.mismatched[0], 20);
-
+        bytes32[] memory l = _honest(N);
+        uint256 id = _runVerified(A, l, l, _withWrong(I1, 1));
+        address[] memory vs = _verifiers(id);
+        address t = _job(id).tiebreaker;
         _shareTie(id);
-        bytes32[] memory tLeaves = new bytes32[](1);
-        tLeaves[0] = honest[20];
-        _submitTie(id, tLeaves);
-
+        _submitTie(id, _honestAt(_job(id).mismatched));
         _assertClosed(id, JobMarket.Outcome.VerifierOutvoted);
-        assertEq(_dStake(v), -_i(SLASH_WRONG));
-        assertEq(_dBal(v), 0);
-        // main: price + S_V - tf = 0.02 + 0.3 - 0.002 = 0.318
-        assertEq(_dBal(A), 0.318 ether);
-        assertEq(_dBal(client), -_i(PRICE)); // fee refunded
+        assertEq(_dBal(A), _i(PRICE));
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dStake(vs[1]), -_i(SLASH_WRONG));
+        assertEq(_dBal(vs[1]), 0);
         assertEq(_dBal(t), _i(TIEBREAK_FEE));
-        assertEq(_stat(A, VERIFIED), 1);
-        assertEq(_stat(v, CHECKS_OUTVOTED), 1);
-        assertEq(_stat(t, CHECKS_DONE), 1);
-        assertEq(_allStats(A) + _allStats(v) + _allStats(t), 3);
+        // client: 0.04 + 0.3 - 0.02 - 0.01 - 0.002 = 0.308 back -> net +0.268
+        assertEq(_dBal(client), _i(SLASH_WRONG) - _i(PRICE + HALF_FEE + TIEBREAK_FEE));
+        assertEq(uint8(_job(id).vstate[1]), uint8(JobMarket.VState.Outvoted));
+        assertEq(_stat(vs[1], ProviderRegistry.Stat.ChecksOutvoted), 1);
+        assertEq(_stat(A, ProviderRegistry.Stat.VerifiedCompleted), 1);
+    }
+
+    function test_VerifierOutvoted_Both() public {
+        _snap();
+        bytes32[] memory l = _honest(N);
+        uint256 id = _runVerified(A, l, _withWrong(I0, 1), _withWrong(I1, 1));
+        address[] memory vs = _verifiers(id);
+        address t = _job(id).tiebreaker;
+        _shareTie(id);
+        _submitTie(id, _honestAt(_job(id).mismatched));
+        _assertClosed(id, JobMarket.Outcome.VerifierOutvoted);
+        assertEq(_dBal(A), _i(PRICE));
+        assertEq(_dStake(vs[0]), -_i(SLASH_WRONG));
+        assertEq(_dStake(vs[1]), -_i(SLASH_WRONG));
+        assertEq(_dBal(t), _i(TIEBREAK_FEE));
+        // client: 0.04 + 0.6 - 0.02 - 0.002 = 0.618 back -> net +0.578
+        assertEq(_dBal(client), _i(2 * SLASH_WRONG) - _i(PRICE + TIEBREAK_FEE));
     }
 
     function test_BothOutvoted() public {
-        bytes32[] memory honest = _honest(N);
-        bytes32[] memory mLeaves = _honest(N);
-        mLeaves[10] = _wrong(10, 1); // M wrong on item 10
-        bytes32[] memory vLeaves = _pick(honest, _indices(N, K));
-        vLeaves[2] = _wrong(20, 2); // V wrong on item 20
         _snap();
-        uint256 id = _runVerified(A, mLeaves, vLeaves);
-
-        JobMarket.Job memory j = _job(id);
-        address v = j.verifier;
-        address t = j.tiebreaker;
-        assertEq(j.mismatched.length, 2);
-        assertEq(j.mismatched[0], 10);
-        assertEq(j.mismatched[1], 20);
-
+        bytes32[] memory l = _honest(N);
+        uint256 id = _runVerified(A, _withWrong(I0, 1), l, _withWrong(I1, 1));
+        address[] memory vs = _verifiers(id);
+        address t = _job(id).tiebreaker;
         _shareTie(id);
-        bytes32[] memory tLeaves = new bytes32[](2);
-        tLeaves[0] = honest[10];
-        tLeaves[1] = honest[20];
-        _submitTie(id, tLeaves);
-
+        _submitTie(id, _honestAt(_job(id).mismatched));
         _assertClosed(id, JobMarket.Outcome.BothOutvoted);
         assertEq(_dStake(A), -_i(SLASH_WRONG));
-        assertEq(_dStake(v), -_i(SLASH_WRONG));
-        assertEq(_dBal(A), 0);
-        assertEq(_dBal(v), 0);
-        // client: full refund + both slashes - tf
-        assertEq(_dBal(client), _i(2 * SLASH_WRONG - TIEBREAK_FEE));
+        assertEq(_dStake(vs[1]), -_i(SLASH_WRONG));
+        assertEq(_dBal(vs[0]), _i(HALF_FEE)); // slot 0 was right
         assertEq(_dBal(t), _i(TIEBREAK_FEE));
-        assertEq(_stat(A, OUTVOTED), 1);
-        assertEq(_stat(v, CHECKS_OUTVOTED), 1);
-        assertEq(_stat(t, CHECKS_DONE), 1);
-    }
-
-    /// One item with no majority and one where V is outvoted -> VerifierOutvoted ("any V outvoted").
-    function test_VerifierOutvoted_MixedWithNoMajorityItem() public {
-        bytes32[] memory honest = _honest(N);
-        bytes32[] memory mLeaves = _honest(N);
-        mLeaves[10] = _wrong(10, 1);
-        bytes32[] memory vLeaves = _pick(honest, _indices(N, K));
-        vLeaves[1] = _wrong(10, 2); // item 10: M, V and T all differ
-        vLeaves[2] = _wrong(20, 3); // item 20: V alone is wrong
-        _snap();
-        uint256 id = _runVerified(A, mLeaves, vLeaves);
-        _shareTie(id);
-        bytes32[] memory tLeaves = new bytes32[](2);
-        tLeaves[0] = honest[10];
-        tLeaves[1] = honest[20];
-        _submitTie(id, tLeaves);
-        _assertClosed(id, JobMarket.Outcome.VerifierOutvoted);
-        assertEq(_dBal(A), 0.318 ether);
+        // client: 0.04 + 0.6 - 0.01 - 0.002 = 0.628 back -> net +0.588
+        assertEq(_dBal(client), _i(2 * SLASH_WRONG) - _i(HALF_FEE + TIEBREAK_FEE));
     }
 
     function test_NoMajority_AllDifferent() public {
-        bytes32[] memory honest = _honest(N);
-        bytes32[] memory mLeaves = _honest(N);
-        mLeaves[10] = _wrong(10, 1);
-        bytes32[] memory vLeaves = _pick(honest, _indices(N, K));
-        vLeaves[1] = _wrong(10, 2);
         _snap();
-        uint256 id = _runVerified(A, mLeaves, vLeaves);
-        JobMarket.Job memory j = _job(id);
-        address v = j.verifier;
-        address t = j.tiebreaker;
-
+        uint256 id = _runVerified(A, _withWrong(I0, 1), _withWrong(I0, 2), _honest(N));
+        address[] memory vs = _verifiers(id);
+        address t = _job(id).tiebreaker;
+        bytes32[] memory tl = new bytes32[](1);
+        tl[0] = _wrong(I0, 3);
         _shareTie(id);
-        bytes32[] memory tLeaves = new bytes32[](1);
-        tLeaves[0] = honest[10]; // a third, different answer
-        _submitTie(id, tLeaves);
-
+        _submitTie(id, tl);
         _assertClosed(id, JobMarket.Outcome.NoMajority);
-        // tf = min(fee, tiebreakFee) = 0.002; client gets price + fee - tf back
-        assertEq(_dBal(client), -_i(TIEBREAK_FEE));
+        assertEq(_dBal(A), 0); // unresolved item: M unpaid, not slashed
+        assertEq(_dStake(A), 0);
+        assertEq(_dBal(vs[0]), 0); // owns the unresolved item
+        assertEq(_dBal(vs[1]), _i(HALF_FEE)); // its range all matched
         assertEq(_dBal(t), _i(TIEBREAK_FEE));
-        assertEq(_stat(t, CHECKS_DONE), 1);
-        _assertUntouched(A);
-        _assertUntouched(v);
+        assertEq(_dBal(client), -_i(HALF_FEE + TIEBREAK_FEE));
     }
 
     function test_NoMajority_NoEligibleTiebreaker() public {
-        bytes32[] memory honest = _honest(N);
-        bytes32[] memory mLeaves = _honest(N);
-        mLeaves[10] = _wrong(10, 1);
-        bytes32[] memory vLeaves = _pick(honest, _indices(N, K));
+        _deactivateAllBut(A, B, C); // M = A, verifiers B and C, nobody left to break ties
         _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _deactivateAllBut(A, v); // nobody left to break the tie
-        _share(id);
-        _commitM(id, mLeaves);
-        _commitV(id, vLeaves);
-        _reveal(id, vLeaves);
-        _publish(id, mLeaves);
-
-        JobMarket.Job memory j = _job(id);
-        assertEq(j.tiebreaker, address(0));
-        assertEq(j.mismatched.length, 1);
+        uint256 id = _runVerified(A, _withWrong(I1, 1), _honest(N), _honest(N));
+        address[] memory vs = _verifiers(id);
+        assertEq(_job(id).tiebreaker, address(0));
         _assertClosed(id, JobMarket.Outcome.NoMajority);
-        assertEq(_dBal(client), 0); // tf = 0: full refund
-        _assertUntouched(A);
-        _assertUntouched(v);
+        assertEq(_dBal(A), 0);
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dBal(vs[1]), 0);
+        assertEq(_dBal(client), -_i(HALF_FEE));
+    }
+
+    function test_VerifierOutvoted_WithUnresolvedItem() public {
+        _snap();
+        // item I0: M, V0 and T all differ (unresolved); item I1: V1 wrong, T agrees with M
+        uint256 id = _runVerified(A, _withWrong(I0, 1), _withWrong(I0, 2), _withWrong(I1, 1));
+        address[] memory vs = _verifiers(id);
+        address t = _job(id).tiebreaker;
+        bytes32[] memory tl = new bytes32[](2);
+        tl[0] = _wrong(I0, 3);
+        tl[1] = _leaf(I1, _label(I1));
+        _shareTie(id);
+        _submitTie(id, tl);
+        _assertClosed(id, JobMarket.Outcome.VerifierOutvoted);
+        assertEq(_dBal(A), 0); // an unresolved item keeps M unpaid
+        assertEq(_dBal(vs[0]), 0);
+        assertEq(_dStake(vs[1]), -_i(SLASH_WRONG));
+        assertEq(_dBal(t), _i(TIEBREAK_FEE));
+        assertEq(_dBal(client), _i(SLASH_WRONG) - _i(TIEBREAK_FEE));
     }
 
     // ------------------------------------------------------------------
-    // MainMissed
+    // Missed deadlines
     // ------------------------------------------------------------------
 
-    function test_MainMissed_InCommitting_VerifierNotCommitted() public {
+    function test_MainMissed_InCommitting() public {
         _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _share(id);
-        // neither commits
-        _pastDeadline(id);
-        market.expire(id);
-
-        _assertClosed(id, JobMarket.Outcome.MainMissed);
-        assertEq(_dStake(A), -_i(SLASH_MISSED));
-        assertEq(_dBal(client), _i(SLASH_MISSED)); // full refund + S_M
-        assertEq(_stat(A, MISSED), 1);
-        assertEq(_allStats(A), 1);
-        _assertUntouched(v);
-    }
-
-    function test_MainMissed_InCommitting_VerifierCommitted() public {
-        bytes32[] memory vLeaves = _pick(_honest(N), _indices(N, K));
-        _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _share(id);
-        _commitV(id, vLeaves);
-        // M never commits
-        _pastDeadline(id);
-        market.expire(id);
-
-        _assertClosed(id, JobMarket.Outcome.MainMissed);
-        // vPay = min(S_M, fee) = 0.002
-        assertEq(_dStake(A), -_i(SLASH_MISSED));
-        assertEq(_dBal(v), _i(FEE));
-        assertEq(_dBal(client), _i(SLASH_MISSED - FEE));
-        assertEq(_stat(A, MISSED), 1);
-        assertEq(_stat(v, CHECKS_DONE), 1);
-    }
-
-    /// Demo scenario 5: unverified job, main never publishes.
-    function test_MainMissed_InPublishing_NoSample() public {
-        _snap();
-        uint256 id = _create(F, N, 0);
+        uint256 id = _create(A, N, true);
         _accept(id);
         _pastDeadline(id);
         market.expire(id);
-
         _assertClosed(id, JobMarket.Outcome.MainMissed);
-        assertEq(_dStake(F), -_i(SLASH_MISSED));
-        assertEq(_dBal(client), 0.1 ether);
-        assertEq(_stat(F, MISSED), 1);
+        assertEq(_dStake(A), -_i(SLASH_MISSED));
+        assertEq(_dBal(client), _i(SLASH_MISSED));
+        assertEq(_stat(A, ProviderRegistry.Stat.Missed), 1);
+    }
+
+    function test_MainMissed_InPublishing_Unverified() public {
+        _snap();
+        uint256 id = _toPublishingUnverified(A, _honest(N));
+        _pastDeadline(id);
+        market.expire(id);
+        _assertClosed(id, JobMarket.Outcome.MainMissed);
+        assertEq(_dStake(A), -_i(SLASH_MISSED));
+        assertEq(_dBal(client), _i(SLASH_MISSED));
     }
 
     function test_MainMissed_InPublishing_AfterReveal() public {
-        bytes32[] memory leaves = _honest(N);
-        bytes32[] memory vLeaves = _pick(leaves, _indices(N, K));
         _snap();
-        uint256 id = _toPublishing(A, leaves, vLeaves);
-        address v = _job(id).verifier;
-        // M never publishes
+        bytes32[] memory l = _honest(N);
+        uint256 id = _toPublishingVerified(A, l, l, l);
+        address[] memory vs = _verifiers(id);
         _pastDeadline(id);
         market.expire(id);
-
         _assertClosed(id, JobMarket.Outcome.MainMissed);
         assertEq(_dStake(A), -_i(SLASH_MISSED));
-        assertEq(_dBal(v), _i(FEE));
-        assertEq(_dBal(client), _i(SLASH_MISSED - FEE));
-        assertEq(_stat(A, MISSED), 1);
-        assertEq(_stat(v, CHECKS_DONE), 1);
-    }
-
-    /// V committed but missed the reveal (slashed, dropped); then M also misses publishing.
-    /// V is not paid from M's slash, and V's slash goes to the client.
-    function test_MainMissed_InPublishing_AfterVerifierMissed() public {
-        bytes32[] memory leaves = _honest(N);
-        bytes32[] memory vLeaves = _pick(leaves, _indices(N, K));
-        _snap();
-        uint256 id = _create(A, N, K);
-        address v = _accept(id);
-        _share(id);
-        _commitM(id, leaves);
-        _commitV(id, vLeaves);
-        _pastDeadline(id);
-        market.expire(id); // VerifierMissed drop
-        _pastDeadline(id);
-        market.expire(id); // MainMissed
-
-        _assertClosed(id, JobMarket.Outcome.MainMissed);
-        assertEq(_dStake(A), -_i(SLASH_MISSED));
-        assertEq(_dStake(v), -_i(SLASH_CHECK));
-        assertEq(_dBal(v), 0);
-        assertEq(_dBal(client), _i(SLASH_MISSED + SLASH_CHECK));
-        assertEq(_stat(A, MISSED), 1);
-        assertEq(_stat(v, CHECKS_MISSED), 1);
-        assertEq(_stat(v, CHECKS_DONE), 0);
-    }
-
-    // ------------------------------------------------------------------
-    // TiebreakerMissed and TieClientNoShare
-    // ------------------------------------------------------------------
-
-    function _toTieBreak() internal returns (uint256 id) {
-        bytes32[] memory mLeaves = _honest(N);
-        mLeaves[10] = _wrong(10, 1);
-        bytes32[] memory vLeaves = _pick(_honest(N), _indices(N, K));
-        id = _runVerified(A, mLeaves, vLeaves);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.TieBreak));
+        assertEq(_dBal(vs[0]), _i(HALF_FEE)); // they did the work
+        assertEq(_dBal(vs[1]), _i(HALF_FEE));
+        assertEq(_dBal(client), _i(SLASH_MISSED) - _i(2 * HALF_FEE));
     }
 
     function test_TiebreakerMissed() public {
         _snap();
-        uint256 id = _toTieBreak();
-        address v = _job(id).verifier;
+        uint256 id = _runVerified(A, _withWrong(I0, 1), _honest(N), _honest(N));
+        address[] memory vs = _verifiers(id);
         address t = _job(id).tiebreaker;
         _shareTie(id);
-        // T never submits
         _pastDeadline(id);
         market.expire(id);
-
         _assertClosed(id, JobMarket.Outcome.TiebreakerMissed);
         assertEq(_dStake(t), -_i(SLASH_CHECK));
-        assertEq(_dBal(t), 0);
-        assertEq(_dBal(client), _i(SLASH_CHECK)); // full refund + S_T
-        assertEq(_stat(t, CHECKS_MISSED), 1);
-        assertEq(_allStats(t), 1);
-        _assertUntouched(A);
-        _assertUntouched(v);
+        assertEq(_dBal(A), 0);
+        assertEq(_dBal(vs[0]), 0); // owns the unresolved item
+        assertEq(_dBal(vs[1]), _i(HALF_FEE));
+        assertEq(_dBal(client), _i(SLASH_CHECK) - _i(HALF_FEE));
+        assertEq(_stat(t, ProviderRegistry.Stat.ChecksMissed), 1);
     }
 
     function test_TieClientNoShare_ClientNeverShares() public {
         _snap();
-        uint256 id = _toTieBreak();
-        address v = _job(id).verifier;
+        uint256 id = _runVerified(A, _withWrong(I0, 1), _honest(N), _honest(N));
+        address[] memory vs = _verifiers(id);
         address t = _job(id).tiebreaker;
-        // the client never shares the tie items
         _pastDeadline(id);
         market.expire(id);
-
         _assertClosed(id, JobMarket.Outcome.TieClientNoShare);
         assertEq(_dBal(A), _i(PRICE));
-        assertEq(_dBal(v), _i(FEE));
-        assertEq(_dBal(client), -_i(PRICE + FEE));
-        assertEq(_stat(A, UNVERIFIED), 1);
-        assertEq(_stat(v, CHECKS_DONE), 1);
-        _assertUntouched(t);
+        assertEq(_dBal(vs[0]), _i(HALF_FEE));
+        assertEq(_dBal(vs[1]), _i(HALF_FEE));
+        assertEq(_dBal(t), 0);
+        assertEq(_dBal(client), -_i(DEPOSIT));
+        assertEq(_stat(A, ProviderRegistry.Stat.UnverifiedCompleted), 1);
     }
 
     function test_TieClientNoShare_TiebreakerReportsBadInput() public {
         _snap();
-        uint256 id = _toTieBreak();
-        address v = _job(id).verifier;
+        uint256 id = _runVerified(A, _withWrong(I0, 1), _honest(N), _honest(N));
         address t = _job(id).tiebreaker;
         _shareTie(id);
         vm.prank(t);
         market.reportBadInput(id);
-
         _assertClosed(id, JobMarket.Outcome.TieClientNoShare);
         assertEq(_dBal(A), _i(PRICE));
-        assertEq(_dBal(v), _i(FEE));
-        assertEq(_dBal(client), -_i(PRICE + FEE));
-        assertEq(_stat(A, UNVERIFIED), 1);
-        assertEq(_stat(v, CHECKS_DONE), 1);
-        _assertUntouched(t);
+        assertEq(_dBal(t), 0);
+        assertEq(_dBal(client), -_i(DEPOSIT));
     }
 
     // ------------------------------------------------------------------
-    // Misc
+    // Hidden decision, pricing, concurrency
     // ------------------------------------------------------------------
 
-    /// Price and fee are pinned at createJob: a later price change doesn't affect the job.
+    /// A verified and an unverified job look the same on-chain until the reveal.
+    function test_DecisionHiddenUntilReveal() public {
+        bytes32[] memory l = _honest(N);
+        uint256 yes = _create(A, N, true);
+        uint256 no = _create(A, N, false);
+        JobMarket.Job memory jy = _job(yes);
+        JobMarket.Job memory jn = _job(no);
+        assertEq(jy.price, jn.price);
+        assertTrue(jy.verifyCommit != jn.verifyCommit); // only the opaque commitment differs
+        assertFalse(jy.decided || jn.decided);
+
+        // nobody has been drawn yet, even after M commits
+        _accept(yes);
+        _accept(no);
+        _commitM(yes, l);
+        _commitM(no, l);
+        assertEq(_verifiers(yes).length, 0);
+        assertEq(uint8(_job(yes).status), uint8(_job(no).status));
+
+        // a wrong opening is refused: the client can't flip its decision
+        vm.prank(client);
+        vm.expectRevert(bytes("verifyCommit mismatch"));
+        market.revealDecision(yes, VERIFY_SALT, false);
+        assertEq(_decide(yes, true).length, 2);
+        assertEq(_decide(no, false).length, 0);
+    }
+
+    /// The price is pinned at createJob: a later price change doesn't affect the job.
     function test_PricePinnedAtCreate() public {
         _snap();
-        uint256 id = _create(A, N, 0);
+        bytes32[] memory l = _honest(N);
+        uint256 id = _create(A, N, false);
         vm.prank(A);
         registry.setPrice(1 ether);
         _accept(id);
-        _publish(id, _honest(N));
+        _commitM(id, l);
+        _decide(id, false);
+        _publish(id, l);
         _assertClosed(id, JobMarket.Outcome.Delivered);
         assertEq(_dBal(A), _i(PRICE));
     }
 
-    /// Several overlapping jobs (one holding a verifier slash) leave the market empty once all close.
+    /// Fees split the items as evenly as integer division allows (odd N).
+    function test_RangesAndFees_OddN() public {
+        uint256 id = _create(A, 7, true);
+        (uint256 s0, uint256 e0) = market.rangeOf(id, 0);
+        (uint256 s1, uint256 e1) = market.rangeOf(id, 1);
+        assertEq(s0, 0);
+        assertEq(e0, 3);
+        assertEq(s1, 3);
+        assertEq(e1, 7);
+        assertEq(market.feeOf(id, 0) + market.feeOf(id, 1), 7 * PPI);
+    }
+
+    /// Overlapping jobs (one holding a verifier slash) leave the market empty once all close.
     function test_ConcurrentJobs_MarketEndsEmpty() public {
-        bytes32[] memory leaves = _honest(N);
-        bytes32[] memory vLeaves = _pick(leaves, _indices(N, K));
-        uint256 j1 = _create(A, N, K);
-        uint256 j2 = _create(B, N, 0);
+        bytes32[] memory l = _honest(N);
+        uint256 j1 = _create(A, N, true);
+        uint256 j2 = _create(B, N, false);
         _accept(j1);
         _accept(j2);
-        _share(j1);
-        _commitM(j1, leaves);
+        _commitM(j1, l);
+        _decide(j1, true);
+        _shareAll(j1);
+        _commitV(j1, 0, l);
         _pastDeadline(j1); // also past j2's deadline
-        market.expire(j1); // j1: verifier missed its commit -> slash held in the market
-        assertGt(_job(j1).verifierSlash, 0);
+        market.expire(j1); // slot 1 missed its commit -> slash held in the market
+        assertGt(_job(j1).slashedPool, 0);
         market.expire(j2); // j2: MainMissed
 
-        uint256 j3 = _create(C, N, K);
-        _accept(j3);
-        _share(j3);
-        _commitM(j3, leaves);
-        _commitV(j3, vLeaves);
-        _reveal(j3, vLeaves);
-        _publish(j3, leaves); // j3: Verified
-        assertGt(address(market).balance, 0); // j1 still open, holding price + fee + V's slash
-        _publish(j1, leaves); // j1: Delivered
-        assertEq(uint8(_job(j1).outcome), uint8(JobMarket.Outcome.Delivered));
+        uint256 j3 = _runVerified(C, l, l, l); // Verified
+        assertGt(address(market).balance, 0); // j1 still open
+        _revealV(j1, 0, l);
+        _publish(j1, l);
+        assertEq(uint8(_job(j1).outcome), uint8(JobMarket.Outcome.Verified));
         assertEq(uint8(_job(j2).outcome), uint8(JobMarket.Outcome.MainMissed));
         assertEq(uint8(_job(j3).outcome), uint8(JobMarket.Outcome.Verified));
         assertEq(address(market).balance, 0);
@@ -705,9 +590,9 @@ contract SettlementTest is DeGPUBase {
 
     /// After a closed job the providers can withdraw again.
     function test_WithdrawAfterClose() public {
-        uint256 id = _create(A, N, 0);
-        _accept(id);
-        _publish(id, _honest(N));
+        bytes32[] memory l = _honest(N);
+        uint256 id = _toPublishingUnverified(A, l);
+        _publish(id, l);
         assertEq(address(market).balance, 0);
         uint256 before = A.balance;
         vm.prank(A);
