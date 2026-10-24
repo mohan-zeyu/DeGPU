@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {ProviderRegistry} from "./ProviderRegistry.sol";
+import {MarketBase} from "./MarketBase.sol";
 
-/// @title JobMarket
-/// @notice Batch-inference jobs with a hidden verification decision.
+/// @title ReplicatedMarket
+/// @notice The "replicated" verification mode: work is checked by re-running it on other providers.
+///         Fits any task whose items have deterministic results (batch inference, rendering...).
 ///         A client posts a job to a main provider M with a commitment to a secret yes/no
 ///         ("verify this job?") and always deposits 2 x price, so M can't tell which jobs will be
 ///         checked. M runs every item and commits to its results; only then does the client
@@ -12,19 +13,20 @@ import {ProviderRegistry} from "./ProviderRegistry.sol";
 ///         share of the items, commit, then reveal, and the contract compares every item. On a
 ///         mismatch a random tie-breaker T re-runs only the mismatched items and the majority
 ///         decides who gets slashed.
-/// @dev See docs/INTERFACE.md (v2) section 7 for every rule implemented here.
+///         Verifiers and tie-breakers are drawn only among providers that offer the job's task type.
+/// @dev See docs/INTERFACE.md section 7 for every rule implemented here.
 ///      Randomness (prevrandao + previous blockhash) is demo-grade; VRF would be the upgrade.
-contract JobMarket {
+contract ReplicatedMarket is MarketBase {
     uint256 public constant MAX_ITEMS = 1000;
 
     struct Params {
         uint64 acceptWindow;
-        uint64 computeWindow; // M must commit within this after accept
+        uint64 computeWindow; // M must commit within this (+ the task's time for N items) after accept
         uint64 decideWindow; // client must reveal its decision within this after M commits
-        uint64 checkWindow; // verifiers must commit within this after being drawn
+        uint64 checkWindow; // verifiers must commit within this (+ time for their range) after being drawn
         uint64 revealWindow; // verifiers must reveal within this
         uint64 publishWindow; // M must publish within this
-        uint64 tiebreakWindow;
+        uint64 tiebreakWindow; // T must submit within this (+ time for the mismatched items)
         uint256 tiebreakFee; // max pay for the tie-breaker
         uint16 wrongSlashBps; // outvoted M or verifier
         uint16 missedSlashBps; // M misses a deadline
@@ -79,6 +81,18 @@ contract JobMarket {
         Outvoted // outvoted by the tie-breaker: slashed
     }
 
+    /// Reputation counters this market keeps in the registry. Main providers use the first four,
+    /// verifiers and tie-breakers the last three.
+    enum Stat {
+        VerifiedCompleted,
+        UnverifiedCompleted,
+        Missed,
+        Outvoted,
+        ChecksCompleted,
+        ChecksMissed,
+        ChecksOutvoted
+    }
+
     struct Job {
         address client;
         address main;
@@ -109,20 +123,12 @@ contract JobMarket {
         bytes32[] mainMismatchLeaves; // M's leaves on `mismatched`
     }
 
-    struct TaskType {
-        bytes32 runnerHash;
-        string name;
-    }
-
-    ProviderRegistry public immutable registry;
-    address public immutable owner;
     Params internal _params;
 
     uint256 public jobCount; // job ids start at 1
-    uint256 public taskTypeCount; // task type ids start at 1
     uint256 public drawNonce; // mixed into every random draw
 
-    mapping(uint256 => TaskType) internal taskTypes;
+    mapping(uint256 => bytes32) internal runnerHashes; // task type => keccak of the official runner code
     mapping(uint256 => Job) internal jobs;
     mapping(uint256 => mapping(uint256 => bytes32)) internal checkLeaf; // jobId => item => verifier's leaf
 
@@ -151,34 +157,36 @@ contract JobMarket {
     event TiebreakShared(uint256 indexed jobId, address indexed tiebreaker, bytes sealedForTiebreaker);
     event TiebreakSubmitted(uint256 indexed jobId, bytes32[] leaves);
     event JobClosed(uint256 indexed jobId, Outcome outcome);
-    event Payout(uint256 indexed jobId, address indexed to, uint256 amount);
-    event ProviderSlashed(uint256 indexed jobId, address indexed provider, uint256 amount);
 
-    constructor(address registry_, Params memory p) {
+    constructor(address registry_, Params memory p) MarketBase(registry_) {
         require(p.numVerifiers >= 1, "need a verifier");
-        owner = msg.sender;
-        registry = ProviderRegistry(registry_);
         _params = p;
-    }
-
-    /// Slashed stake arrives here from the registry; nobody else may send ETH directly.
-    receive() external payable {
-        require(msg.sender == address(registry), "only registry");
     }
 
     // ------------------------------------------------------------------
     // Setup and views
     // ------------------------------------------------------------------
 
-    function addTaskType(bytes32 runnerHash, string calldata name) external returns (uint256 id) {
-        require(msg.sender == owner, "not owner");
-        id = ++taskTypeCount;
-        taskTypes[id] = TaskType(runnerHash, name);
+    function mode() external pure override returns (string memory) {
+        return "replicated";
     }
 
-    function taskTypeOf(uint256 id) external view returns (bytes32 runnerHash, string memory name) {
-        TaskType storage t = taskTypes[id];
-        return (t.runnerHash, t.name);
+    /// @notice Owner only: add a task type whose official runner code hashes to `runnerHash`.
+    function addTaskType(bytes32 runnerHash, string calldata name, uint64 secondsPerItem)
+        external
+        returns (uint256 id)
+    {
+        id = _addTaskType(name, secondsPerItem);
+        runnerHashes[id] = runnerHash;
+    }
+
+    function taskTypeOf(uint256 id)
+        external
+        view
+        returns (bytes32 runnerHash, string memory name, uint64 secondsPerItem)
+    {
+        TaskInfo storage t = taskInfo[id];
+        return (runnerHashes[id], t.name, t.secondsPerItem);
     }
 
     function getJob(uint256 jobId) external view returns (Job memory) {
@@ -222,16 +230,15 @@ contract JobMarket {
         bytes32 verifyCommit,
         bytes calldata sealedForMain
     ) external payable returns (uint256 jobId) {
-        require(taskType >= 1 && taskType <= taskTypeCount, "unknown task type");
+        _requireTaskType(taskType);
         require(registry.isActive(main), "main not active");
         require(main != msg.sender, "main is client");
         require(numItems >= 1 && numItems <= MAX_ITEMS, "bad numItems");
         require(verifyCommit != 0, "zero verifyCommit");
 
-        // Pin the price from M's current per-item price. Every job deposits 2 x price
-        // (price + a full verification fee), so the deposit says nothing about the decision.
-        (,,, uint256 pricePerItem,) = registry.getProvider(main);
-        uint256 price = numItems * pricePerItem;
+        // Pin the price from M's current per-item price for this task type. Every job deposits
+        // 2 x price (price + a full verification fee), so the deposit says nothing about the decision.
+        uint256 price = numItems * _pinPrice(main, taskType);
         require(msg.value == 2 * price, "wrong value");
 
         jobId = ++jobCount;
@@ -262,7 +269,7 @@ contract JobMarket {
         _beforeDeadline(j);
         require(registry.isActive(j.main), "main not active");
         registry.lock(j.main);
-        _setPhase(j, Status.Committing, _params.computeWindow);
+        _setPhase(j, Status.Committing, _params.computeWindow + _taskTime(j.taskType, j.numItems));
         emit JobAccepted(jobId);
     }
 
@@ -418,7 +425,7 @@ contract JobMarket {
         }
         registry.lock(t);
         j.tiebreaker = t;
-        _setPhase(j, Status.TieBreak, _params.tiebreakWindow);
+        _setPhase(j, Status.TieBreak, _params.tiebreakWindow + _taskTime(j.taskType, j.mismatched.length));
         emit TiebreakStarted(jobId, t, j.mismatched);
     }
 
@@ -583,7 +590,8 @@ contract JobMarket {
             j.vcommit.push(bytes32(0));
             drawn[slot] = v;
         }
-        _setPhase(j, Status.Checking, _params.checkWindow);
+        uint256 largestRange = (j.numItems + m - 1) / m;
+        _setPhase(j, Status.Checking, _params.checkWindow + _taskTime(j.taskType, largestRange));
         emit VerifiersDrawn(jobId, drawn);
     }
 
@@ -599,7 +607,7 @@ contract JobMarket {
         address v = j.verifiers[slot];
         j.vstate[slot] = VState.Missed;
         j.slashedPool += _slash(jobId, v, _params.checkMissedSlashBps);
-        registry.bump(v, ProviderRegistry.Stat.ChecksMissed);
+        _bump(v, Stat.ChecksMissed);
         registry.unlock(v);
         emit VerifierDropped(jobId, slot, VState.Missed);
     }
@@ -611,10 +619,12 @@ contract JobMarket {
         }
     }
 
-    /// Draw a random active provider not among the first `nEx` entries of `ex`; address(0) if none.
+    /// Draw a random active provider that offers the job's task type and is not among the first
+    /// `nEx` entries of `ex`; address(0) if none.
     function _draw(uint256 jobId, address[] memory ex, uint256 nEx) internal returns (address) {
         uint256 n = registry.providerCount();
         if (n == 0) return address(0);
+        uint256 taskType = jobs[jobId].taskType;
         uint256 start =
             uint256(keccak256(abi.encode(block.prevrandao, blockhash(block.number - 1), jobId, ex, drawNonce++))) % n;
         for (uint256 x = 0; x < n; x++) {
@@ -626,18 +636,13 @@ contract JobMarket {
                     break;
                 }
             }
-            if (!excluded && registry.isActive(p)) return p;
+            if (!excluded && registry.isActive(p) && _priceOf(p, taskType) > 0) return p;
         }
         return address(0);
     }
 
-    function _slash(uint256 jobId, address p, uint256 bps) internal returns (uint256 amount) {
-        amount = registry.slash(p, bps); // the registry sends `amount` wei to this contract
-        emit ProviderSlashed(jobId, p, amount);
-    }
-
-    function _bump(address p, ProviderRegistry.Stat s) internal {
-        registry.bump(p, s);
+    function _bump(address p, Stat s) internal {
+        registry.bump(p, uint8(s), 1);
     }
 
     /// Close the job: decide each party's pay or slash, unlock everyone, then push the payouts.
@@ -660,14 +665,14 @@ contract JobMarket {
         uint256 mainPay = 0;
         if (outcome == Outcome.MainMissed) {
             pool += _slash(jobId, j.main, _params.missedSlashBps);
-            _bump(j.main, ProviderRegistry.Stat.Missed);
+            _bump(j.main, Stat.Missed);
         } else if (j.mainOutvoted) {
             pool += _slash(jobId, j.main, _params.wrongSlashBps);
-            _bump(j.main, ProviderRegistry.Stat.Outvoted);
+            _bump(j.main, Stat.Outvoted);
         } else if (j.unresolvedMask == 0) {
             mainPay = j.price;
             bool verified = outcome == Outcome.Verified || outcome == Outcome.VerifierOutvoted;
-            _bump(j.main, verified ? ProviderRegistry.Stat.VerifiedCompleted : ProviderRegistry.Stat.UnverifiedCompleted);
+            _bump(j.main, verified ? Stat.VerifiedCompleted : Stat.UnverifiedCompleted);
         }
         registry.unlock(j.main);
 
@@ -682,12 +687,12 @@ contract JobMarket {
             if ((j.outvotedMask >> slot) & 1 == 1) {
                 pool += _slash(jobId, v, _params.wrongSlashBps);
                 j.vstate[slot] = VState.Outvoted;
-                _bump(v, ProviderRegistry.Stat.ChecksOutvoted);
+                _bump(v, Stat.ChecksOutvoted);
             } else if (st == VState.NoShare) {
                 vPay[slot] = feeOf(jobId, slot); // the client never shared: it forfeits this share
             } else if (st == VState.Revealed && (j.unresolvedMask >> slot) & 1 == 0) {
                 vPay[slot] = feeOf(jobId, slot);
-                _bump(v, ProviderRegistry.Stat.ChecksCompleted);
+                _bump(v, Stat.ChecksCompleted);
             }
             vTotal += vPay[slot];
             registry.unlock(v);
@@ -698,11 +703,11 @@ contract JobMarket {
         if (j.tiebreaker != address(0)) {
             if (outcome == Outcome.TiebreakerMissed) {
                 pool += _slash(jobId, j.tiebreaker, _params.checkMissedSlashBps);
-                _bump(j.tiebreaker, ProviderRegistry.Stat.ChecksMissed);
+                _bump(j.tiebreaker, Stat.ChecksMissed);
             } else if (j.tieSubmitted) {
                 uint256 left = pool - mainPay - vTotal;
                 tPay = _params.tiebreakFee < left ? _params.tiebreakFee : left;
-                _bump(j.tiebreaker, ProviderRegistry.Stat.ChecksCompleted);
+                _bump(j.tiebreaker, Stat.ChecksCompleted);
             }
             registry.unlock(j.tiebreaker);
         }
@@ -715,13 +720,5 @@ contract JobMarket {
         _pay(jobId, j.tiebreaker, tPay);
         _pay(jobId, j.client, pool - mainPay - vTotal - tPay);
         emit JobClosed(jobId, outcome);
-    }
-
-    /// Push `amount` wei to `to` (skipped when zero) and log it.
-    function _pay(uint256 jobId, address to, uint256 amount) internal {
-        if (amount == 0) return;
-        emit Payout(jobId, to, amount);
-        (bool ok,) = to.call{value: amount}("");
-        require(ok, "payout failed");
     }
 }

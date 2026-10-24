@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {DeGPUBase} from "./DeGPUBase.t.sol";
-import {JobMarket} from "../src/JobMarket.sol";
+import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 
 /// @notice One test (or more) per settlement case of INTERFACE.md (v2) section 7, with exact payouts,
@@ -25,12 +25,9 @@ contract SettlementTest is DeGPUBase {
         l[i] = _wrong(i, delta);
     }
 
-    function _redeployWith(JobMarket.Params memory p) internal {
+    function _redeployWith(ReplicatedMarket.Params memory p) internal {
         _deploy(p);
-        for (uint256 i = 0; i < providers.length; i++) {
-            vm.prank(providers[i]);
-            registry.register{value: STAKE}(bytes32(i + 1), PPI);
-        }
+        _registerAll();
     }
 
     // ------------------------------------------------------------------
@@ -43,7 +40,7 @@ contract SettlementTest is DeGPUBase {
         assertEq(address(market).balance, DEPOSIT);
         vm.prank(client);
         market.cancel(id);
-        _assertClosed(id, JobMarket.Outcome.Cancelled);
+        _assertClosed(id, ReplicatedMarket.Outcome.Cancelled);
         assertEq(_dBal(client), 0);
     }
 
@@ -53,7 +50,7 @@ contract SettlementTest is DeGPUBase {
         _pastDeadline(id);
         vm.prank(stranger);
         market.expire(id);
-        _assertClosed(id, JobMarket.Outcome.Cancelled);
+        _assertClosed(id, ReplicatedMarket.Outcome.Cancelled);
         assertEq(_dBal(client), 0);
     }
 
@@ -69,11 +66,11 @@ contract SettlementTest is DeGPUBase {
         assertTrue(_job(id).decided);
         assertFalse(_job(id).verify);
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Delivered);
+        _assertClosed(id, ReplicatedMarket.Outcome.Delivered);
         assertEq(_dBal(client), -_i(PRICE)); // the unused fee half of the deposit comes back
         assertEq(_dBal(A), _i(PRICE));
-        assertEq(_stat(A, ProviderRegistry.Stat.UnverifiedCompleted), 1);
-        assertEq(_stat(A, ProviderRegistry.Stat.VerifiedCompleted), 0);
+        assertEq(_stat(A, ReplicatedMarket.Stat.UnverifiedCompleted), 1);
+        assertEq(_stat(A, ReplicatedMarket.Stat.VerifiedCompleted), 0);
     }
 
     function test_Delivered_ClientNoReveal() public {
@@ -84,12 +81,12 @@ contract SettlementTest is DeGPUBase {
         _commitM(id, l);
         _pastDeadline(id);
         market.expire(id);
-        JobMarket.Job memory j = _job(id);
-        assertEq(uint8(j.status), uint8(JobMarket.Status.Publishing));
-        assertEq(uint8(j.drop), uint8(JobMarket.Drop.ClientNoReveal));
+        ReplicatedMarket.Job memory j = _job(id);
+        assertEq(uint8(j.status), uint8(ReplicatedMarket.Status.Publishing));
+        assertEq(uint8(j.drop), uint8(ReplicatedMarket.Drop.ClientNoReveal));
         assertFalse(j.verify);
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Delivered);
+        _assertClosed(id, ReplicatedMarket.Outcome.Delivered);
         assertEq(_dBal(client), -_i(PRICE));
         assertEq(_dBal(A), _i(PRICE));
     }
@@ -103,10 +100,10 @@ contract SettlementTest is DeGPUBase {
         _commitM(id, l);
         address[] memory vs = _decide(id, true);
         assertEq(vs.length, 0);
-        assertEq(uint8(_job(id).drop), uint8(JobMarket.Drop.NoEligibleVerifier));
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Publishing));
+        assertEq(uint8(_job(id).drop), uint8(ReplicatedMarket.Drop.NoEligibleVerifier));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.Publishing));
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Delivered);
+        _assertClosed(id, ReplicatedMarket.Outcome.Delivered);
         assertEq(_dBal(client), -_i(PRICE));
         assertEq(_dBal(A), _i(PRICE));
     }
@@ -124,9 +121,9 @@ contract SettlementTest is DeGPUBase {
         assertEq(_locks(vs[0]), 0); // unlocked right away
         vm.prank(vs[1]);
         market.reportBadInput(id);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Publishing));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.Publishing));
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Delivered);
+        _assertClosed(id, ReplicatedMarket.Outcome.Delivered);
         assertEq(_dBal(client), -_i(PRICE));
         assertEq(_dBal(vs[0]), 0);
         assertEq(_dBal(vs[1]), 0);
@@ -142,14 +139,14 @@ contract SettlementTest is DeGPUBase {
         address[] memory vs = _decide(id, true);
         _pastDeadline(id);
         market.expire(id); // both slots -> NoShare, nothing to reveal -> Publishing
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Publishing));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.Publishing));
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Delivered);
+        _assertClosed(id, ReplicatedMarket.Outcome.Delivered);
         // the client forfeits both verifier fees
         assertEq(_dBal(client), -_i(DEPOSIT));
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
         assertEq(_dBal(vs[1]), _i(HALF_FEE));
-        assertEq(_stat(A, ProviderRegistry.Stat.UnverifiedCompleted), 1);
+        assertEq(_stat(A, ReplicatedMarket.Stat.UnverifiedCompleted), 1);
     }
 
     // ------------------------------------------------------------------
@@ -161,27 +158,27 @@ contract SettlementTest is DeGPUBase {
         bytes32[] memory l = _honest(N);
         uint256 id = _runVerified(A, l, l, l);
         address[] memory vs = _verifiers(id);
-        _assertClosed(id, JobMarket.Outcome.Verified);
+        _assertClosed(id, ReplicatedMarket.Outcome.Verified);
         assertEq(_dBal(client), -_i(DEPOSIT));
         assertEq(_dBal(A), _i(PRICE));
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
         assertEq(_dBal(vs[1]), _i(HALF_FEE));
-        assertEq(_stat(A, ProviderRegistry.Stat.VerifiedCompleted), 1);
-        assertEq(_stat(vs[0], ProviderRegistry.Stat.ChecksCompleted), 1);
-        assertEq(_stat(vs[1], ProviderRegistry.Stat.ChecksCompleted), 1);
+        assertEq(_stat(A, ReplicatedMarket.Stat.VerifiedCompleted), 1);
+        assertEq(_stat(vs[0], ReplicatedMarket.Stat.ChecksCompleted), 1);
+        assertEq(_stat(vs[1], ReplicatedMarket.Stat.ChecksCompleted), 1);
         // every item was checked: each verifier's range is stored
         assertEq(market.checkLeafOf(id, 0), l[0]);
         assertEq(market.checkLeafOf(id, N - 1), l[N - 1]);
     }
 
     function test_Verified_WithinMaxMismatch() public {
-        JobMarket.Params memory p = demoParams();
+        ReplicatedMarket.Params memory p = demoParams();
         p.maxMismatch = 1;
         _redeployWith(p);
         _snap();
         bytes32[] memory l = _honest(N);
         uint256 id = _runVerified(A, l, l, _withWrong(I1, 1));
-        _assertClosed(id, JobMarket.Outcome.Verified);
+        _assertClosed(id, ReplicatedMarket.Outcome.Verified);
         assertEq(_dBal(client), -_i(DEPOSIT));
         assertEq(_dBal(A), _i(PRICE));
     }
@@ -197,14 +194,14 @@ contract SettlementTest is DeGPUBase {
         vm.prank(vs[1]);
         market.reportBadInput(id);
         _commitV(id, 0, l);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.CheckReveal));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.CheckReveal));
         _revealV(id, 0, l);
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Verified);
+        _assertClosed(id, ReplicatedMarket.Outcome.Verified);
         assertEq(_dBal(client), -_i(PRICE + HALF_FEE)); // slot 1's fee comes back
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
         assertEq(_dBal(vs[1]), 0);
-        assertEq(uint8(_job(id).vstate[1]), uint8(JobMarket.VState.BadInput));
+        assertEq(uint8(_job(id).vstate[1]), uint8(ReplicatedMarket.VState.BadInput));
     }
 
     function test_Verified_OneVerifierNoShare() public {
@@ -216,14 +213,14 @@ contract SettlementTest is DeGPUBase {
         address[] memory vs = _decide(id, true);
         _share(id, 0);
         _commitV(id, 0, l);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Checking)); // slot 1 still waits
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.Checking)); // slot 1 still waits
         _pastDeadline(id);
         market.expire(id);
-        assertEq(uint8(_job(id).vstate[1]), uint8(JobMarket.VState.NoShare));
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.CheckReveal));
+        assertEq(uint8(_job(id).vstate[1]), uint8(ReplicatedMarket.VState.NoShare));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.CheckReveal));
         _revealV(id, 0, l);
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Verified);
+        _assertClosed(id, ReplicatedMarket.Outcome.Verified);
         assertEq(_dBal(client), -_i(DEPOSIT)); // the client forfeits slot 1's fee
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
         assertEq(_dBal(vs[1]), _i(HALF_FEE));
@@ -240,17 +237,17 @@ contract SettlementTest is DeGPUBase {
         _commitV(id, 0, l);
         _pastDeadline(id);
         market.expire(id); // slot 1 shared but never committed -> Missed, slashed now
-        assertEq(uint8(_job(id).vstate[1]), uint8(JobMarket.VState.Missed));
+        assertEq(uint8(_job(id).vstate[1]), uint8(ReplicatedMarket.VState.Missed));
         assertEq(_job(id).slashedPool, SLASH_CHECK);
         assertEq(_locks(vs[1]), 0);
         _revealV(id, 0, l);
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Verified);
+        _assertClosed(id, ReplicatedMarket.Outcome.Verified);
         assertEq(_dBal(client), -_i(PRICE + HALF_FEE) + _i(SLASH_CHECK));
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
         assertEq(_dBal(vs[1]), 0);
         assertEq(_dStake(vs[1]), -_i(SLASH_CHECK));
-        assertEq(_stat(vs[1], ProviderRegistry.Stat.ChecksMissed), 1);
+        assertEq(_stat(vs[1], ReplicatedMarket.Stat.ChecksMissed), 1);
     }
 
     function test_Verified_OneVerifierMissedReveal() public {
@@ -264,12 +261,12 @@ contract SettlementTest is DeGPUBase {
         _commitV(id, 0, l);
         _commitV(id, 1, l);
         _revealV(id, 0, l);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.CheckReveal));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.CheckReveal));
         _pastDeadline(id);
         market.expire(id);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.Publishing));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.Publishing));
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Verified);
+        _assertClosed(id, ReplicatedMarket.Outcome.Verified);
         assertEq(_dBal(client), -_i(PRICE + HALF_FEE) + _i(SLASH_CHECK));
         assertEq(_dStake(vs[1]), -_i(SLASH_CHECK));
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
@@ -286,7 +283,7 @@ contract SettlementTest is DeGPUBase {
         m[I0] = _wrong(I0, 1);
         m[I1] = _wrong(I1, 1);
         uint256 id = _runVerified(A, m, l, l);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.TieBreak));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.TieBreak));
         uint256[] memory mis = _job(id).mismatched;
         assertEq(mis.length, 2);
         assertEq(mis[0], I0);
@@ -297,7 +294,7 @@ contract SettlementTest is DeGPUBase {
 
         _shareTie(id);
         _submitTie(id, _honestAt(mis));
-        _assertClosed(id, JobMarket.Outcome.MainOutvoted);
+        _assertClosed(id, ReplicatedMarket.Outcome.MainOutvoted);
         assertEq(_dStake(A), -_i(SLASH_WRONG));
         assertEq(_dBal(A), 0);
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
@@ -305,8 +302,8 @@ contract SettlementTest is DeGPUBase {
         assertEq(_dBal(t), _i(TIEBREAK_FEE));
         // client: deposit 0.04 + slash 0.3 - fees 0.02 - T 0.002 = 0.318 back -> net +0.278
         assertEq(_dBal(client), _i(SLASH_WRONG) - _i(2 * HALF_FEE + TIEBREAK_FEE));
-        assertEq(_stat(A, ProviderRegistry.Stat.Outvoted), 1);
-        assertEq(_stat(t, ProviderRegistry.Stat.ChecksCompleted), 1);
+        assertEq(_stat(A, ReplicatedMarket.Stat.Outvoted), 1);
+        assertEq(_stat(t, ReplicatedMarket.Stat.ChecksCompleted), 1);
         assertFalse(registry.isActive(A)); // 0.7 < 0.8
     }
 
@@ -318,7 +315,7 @@ contract SettlementTest is DeGPUBase {
         address t = _job(id).tiebreaker;
         _shareTie(id);
         _submitTie(id, _honestAt(_job(id).mismatched));
-        _assertClosed(id, JobMarket.Outcome.VerifierOutvoted);
+        _assertClosed(id, ReplicatedMarket.Outcome.VerifierOutvoted);
         assertEq(_dBal(A), _i(PRICE));
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
         assertEq(_dStake(vs[1]), -_i(SLASH_WRONG));
@@ -326,9 +323,9 @@ contract SettlementTest is DeGPUBase {
         assertEq(_dBal(t), _i(TIEBREAK_FEE));
         // client: 0.04 + 0.3 - 0.02 - 0.01 - 0.002 = 0.308 back -> net +0.268
         assertEq(_dBal(client), _i(SLASH_WRONG) - _i(PRICE + HALF_FEE + TIEBREAK_FEE));
-        assertEq(uint8(_job(id).vstate[1]), uint8(JobMarket.VState.Outvoted));
-        assertEq(_stat(vs[1], ProviderRegistry.Stat.ChecksOutvoted), 1);
-        assertEq(_stat(A, ProviderRegistry.Stat.VerifiedCompleted), 1);
+        assertEq(uint8(_job(id).vstate[1]), uint8(ReplicatedMarket.VState.Outvoted));
+        assertEq(_stat(vs[1], ReplicatedMarket.Stat.ChecksOutvoted), 1);
+        assertEq(_stat(A, ReplicatedMarket.Stat.VerifiedCompleted), 1);
     }
 
     function test_VerifierOutvoted_Both() public {
@@ -339,7 +336,7 @@ contract SettlementTest is DeGPUBase {
         address t = _job(id).tiebreaker;
         _shareTie(id);
         _submitTie(id, _honestAt(_job(id).mismatched));
-        _assertClosed(id, JobMarket.Outcome.VerifierOutvoted);
+        _assertClosed(id, ReplicatedMarket.Outcome.VerifierOutvoted);
         assertEq(_dBal(A), _i(PRICE));
         assertEq(_dStake(vs[0]), -_i(SLASH_WRONG));
         assertEq(_dStake(vs[1]), -_i(SLASH_WRONG));
@@ -356,7 +353,7 @@ contract SettlementTest is DeGPUBase {
         address t = _job(id).tiebreaker;
         _shareTie(id);
         _submitTie(id, _honestAt(_job(id).mismatched));
-        _assertClosed(id, JobMarket.Outcome.BothOutvoted);
+        _assertClosed(id, ReplicatedMarket.Outcome.BothOutvoted);
         assertEq(_dStake(A), -_i(SLASH_WRONG));
         assertEq(_dStake(vs[1]), -_i(SLASH_WRONG));
         assertEq(_dBal(vs[0]), _i(HALF_FEE)); // slot 0 was right
@@ -374,7 +371,7 @@ contract SettlementTest is DeGPUBase {
         tl[0] = _wrong(I0, 3);
         _shareTie(id);
         _submitTie(id, tl);
-        _assertClosed(id, JobMarket.Outcome.NoMajority);
+        _assertClosed(id, ReplicatedMarket.Outcome.NoMajority);
         assertEq(_dBal(A), 0); // unresolved item: M unpaid, not slashed
         assertEq(_dStake(A), 0);
         assertEq(_dBal(vs[0]), 0); // owns the unresolved item
@@ -389,7 +386,7 @@ contract SettlementTest is DeGPUBase {
         uint256 id = _runVerified(A, _withWrong(I1, 1), _honest(N), _honest(N));
         address[] memory vs = _verifiers(id);
         assertEq(_job(id).tiebreaker, address(0));
-        _assertClosed(id, JobMarket.Outcome.NoMajority);
+        _assertClosed(id, ReplicatedMarket.Outcome.NoMajority);
         assertEq(_dBal(A), 0);
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
         assertEq(_dBal(vs[1]), 0);
@@ -407,7 +404,7 @@ contract SettlementTest is DeGPUBase {
         tl[1] = _leaf(I1, _label(I1));
         _shareTie(id);
         _submitTie(id, tl);
-        _assertClosed(id, JobMarket.Outcome.VerifierOutvoted);
+        _assertClosed(id, ReplicatedMarket.Outcome.VerifierOutvoted);
         assertEq(_dBal(A), 0); // an unresolved item keeps M unpaid
         assertEq(_dBal(vs[0]), 0);
         assertEq(_dStake(vs[1]), -_i(SLASH_WRONG));
@@ -425,10 +422,10 @@ contract SettlementTest is DeGPUBase {
         _accept(id);
         _pastDeadline(id);
         market.expire(id);
-        _assertClosed(id, JobMarket.Outcome.MainMissed);
+        _assertClosed(id, ReplicatedMarket.Outcome.MainMissed);
         assertEq(_dStake(A), -_i(SLASH_MISSED));
         assertEq(_dBal(client), _i(SLASH_MISSED));
-        assertEq(_stat(A, ProviderRegistry.Stat.Missed), 1);
+        assertEq(_stat(A, ReplicatedMarket.Stat.Missed), 1);
     }
 
     function test_MainMissed_InPublishing_Unverified() public {
@@ -436,7 +433,7 @@ contract SettlementTest is DeGPUBase {
         uint256 id = _toPublishingUnverified(A, _honest(N));
         _pastDeadline(id);
         market.expire(id);
-        _assertClosed(id, JobMarket.Outcome.MainMissed);
+        _assertClosed(id, ReplicatedMarket.Outcome.MainMissed);
         assertEq(_dStake(A), -_i(SLASH_MISSED));
         assertEq(_dBal(client), _i(SLASH_MISSED));
     }
@@ -448,7 +445,7 @@ contract SettlementTest is DeGPUBase {
         address[] memory vs = _verifiers(id);
         _pastDeadline(id);
         market.expire(id);
-        _assertClosed(id, JobMarket.Outcome.MainMissed);
+        _assertClosed(id, ReplicatedMarket.Outcome.MainMissed);
         assertEq(_dStake(A), -_i(SLASH_MISSED));
         assertEq(_dBal(vs[0]), _i(HALF_FEE)); // they did the work
         assertEq(_dBal(vs[1]), _i(HALF_FEE));
@@ -463,13 +460,13 @@ contract SettlementTest is DeGPUBase {
         _shareTie(id);
         _pastDeadline(id);
         market.expire(id);
-        _assertClosed(id, JobMarket.Outcome.TiebreakerMissed);
+        _assertClosed(id, ReplicatedMarket.Outcome.TiebreakerMissed);
         assertEq(_dStake(t), -_i(SLASH_CHECK));
         assertEq(_dBal(A), 0);
         assertEq(_dBal(vs[0]), 0); // owns the unresolved item
         assertEq(_dBal(vs[1]), _i(HALF_FEE));
         assertEq(_dBal(client), _i(SLASH_CHECK) - _i(HALF_FEE));
-        assertEq(_stat(t, ProviderRegistry.Stat.ChecksMissed), 1);
+        assertEq(_stat(t, ReplicatedMarket.Stat.ChecksMissed), 1);
     }
 
     function test_TieClientNoShare_ClientNeverShares() public {
@@ -479,13 +476,13 @@ contract SettlementTest is DeGPUBase {
         address t = _job(id).tiebreaker;
         _pastDeadline(id);
         market.expire(id);
-        _assertClosed(id, JobMarket.Outcome.TieClientNoShare);
+        _assertClosed(id, ReplicatedMarket.Outcome.TieClientNoShare);
         assertEq(_dBal(A), _i(PRICE));
         assertEq(_dBal(vs[0]), _i(HALF_FEE));
         assertEq(_dBal(vs[1]), _i(HALF_FEE));
         assertEq(_dBal(t), 0);
         assertEq(_dBal(client), -_i(DEPOSIT));
-        assertEq(_stat(A, ProviderRegistry.Stat.UnverifiedCompleted), 1);
+        assertEq(_stat(A, ReplicatedMarket.Stat.UnverifiedCompleted), 1);
     }
 
     function test_TieClientNoShare_TiebreakerReportsBadInput() public {
@@ -495,7 +492,7 @@ contract SettlementTest is DeGPUBase {
         _shareTie(id);
         vm.prank(t);
         market.reportBadInput(id);
-        _assertClosed(id, JobMarket.Outcome.TieClientNoShare);
+        _assertClosed(id, ReplicatedMarket.Outcome.TieClientNoShare);
         assertEq(_dBal(A), _i(PRICE));
         assertEq(_dBal(t), 0);
         assertEq(_dBal(client), -_i(DEPOSIT));
@@ -510,8 +507,8 @@ contract SettlementTest is DeGPUBase {
         bytes32[] memory l = _honest(N);
         uint256 yes = _create(A, N, true);
         uint256 no = _create(A, N, false);
-        JobMarket.Job memory jy = _job(yes);
-        JobMarket.Job memory jn = _job(no);
+        ReplicatedMarket.Job memory jy = _job(yes);
+        ReplicatedMarket.Job memory jn = _job(no);
         assertEq(jy.price, jn.price);
         assertTrue(jy.verifyCommit != jn.verifyCommit); // only the opaque commitment differs
         assertFalse(jy.decided || jn.decided);
@@ -538,12 +535,12 @@ contract SettlementTest is DeGPUBase {
         bytes32[] memory l = _honest(N);
         uint256 id = _create(A, N, false);
         vm.prank(A);
-        registry.setPrice(1 ether);
+        registry.setPrice(address(market), TASK, 1 ether);
         _accept(id);
         _commitM(id, l);
         _decide(id, false);
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Delivered);
+        _assertClosed(id, ReplicatedMarket.Outcome.Delivered);
         assertEq(_dBal(A), _i(PRICE));
     }
 
@@ -579,9 +576,9 @@ contract SettlementTest is DeGPUBase {
         assertGt(address(market).balance, 0); // j1 still open
         _revealV(j1, 0, l);
         _publish(j1, l);
-        assertEq(uint8(_job(j1).outcome), uint8(JobMarket.Outcome.Verified));
-        assertEq(uint8(_job(j2).outcome), uint8(JobMarket.Outcome.MainMissed));
-        assertEq(uint8(_job(j3).outcome), uint8(JobMarket.Outcome.Verified));
+        assertEq(uint8(_job(j1).outcome), uint8(ReplicatedMarket.Outcome.Verified));
+        assertEq(uint8(_job(j2).outcome), uint8(ReplicatedMarket.Outcome.MainMissed));
+        assertEq(uint8(_job(j3).outcome), uint8(ReplicatedMarket.Outcome.Verified));
         assertEq(address(market).balance, 0);
         for (uint256 i = 0; i < providers.length; i++) {
             assertEq(_locks(providers[i]), 0);

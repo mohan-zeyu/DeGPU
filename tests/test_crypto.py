@@ -71,8 +71,8 @@ def test_job_salt_golden():
     assert crypto.job_salt(K_JOB) == h("0xe498e837d1aa76f441e8e27856448c4991f2e73b5d94dcf8745c92e68656ce64")
 
 
-def test_model_key_golden():
-    assert crypto.model_key(K_JOB) == h("0x25e5692a3174ace83b0eefef011757a926e43a5b61a64bb883b2e073b6d7cbf9")
+def test_shared_key_golden():
+    assert crypto.shared_key(K_JOB) == h("0x25e5692a3174ace83b0eefef011757a926e43a5b61a64bb883b2e073b6d7cbf9")
 
 
 def test_item_key_golden():
@@ -80,7 +80,7 @@ def test_item_key_golden():
 
 
 def test_derived_keys_are_distinct():
-    keys = {crypto.job_salt(K_JOB), crypto.model_key(K_JOB)}
+    keys = {crypto.job_salt(K_JOB), crypto.shared_key(K_JOB)}
     keys |= {crypto.item_key(K_JOB, i) for i in range(50)}
     assert len(keys) == 52
     assert all(len(k) == 32 for k in keys)
@@ -119,7 +119,7 @@ def test_seal_unseal_round_trip():
     priv, pub = crypto.generate_keypair()
     payload = {
         "job_salt": "0x" + crypto.job_salt(K_JOB).hex(),
-        "model_key": "0x" + crypto.model_key(K_JOB).hex(),
+        "shared_key": "0x" + crypto.shared_key(K_JOB).hex(),
         "sample_salt": "0x" + b32(0x22).hex(),
         "indices": [0, 5, 9],
         "item_keys": {str(i): "0x" + crypto.item_key(K_JOB, i).hex() for i in (0, 5, 9)},
@@ -147,7 +147,7 @@ def test_unseal_wrong_key_fails():
 # --- file encryption ---------------------------------------------------------
 
 def test_encrypt_decrypt_round_trip():
-    key = crypto.model_key(K_JOB)
+    key = crypto.shared_key(K_JOB)
     plaintext = b"some model bytes " * 1000
     blob = crypto.encrypt(key, plaintext)
     assert isinstance(blob, bytes)
@@ -203,36 +203,37 @@ def test_tampered_image_changes_data_hash():
 
 
 def test_manifest_flow_detects_tampered_item(tmp_path):
-    """End to end on the Python side: the client encrypts and uploads, a provider
-    downloads, decrypts and checks every plaintext hash against dataHash."""
+    """End to end on the Python side, with the replicated mode's own helpers: the client
+    encrypts and uploads (pack_inputs), a provider downloads, decrypts and checks every
+    plaintext hash against dataHash (load_inputs)."""
+    from types import SimpleNamespace
+
+    from degpu.modes.replicated import InputError, load_inputs, pack_inputs
+    from degpu.tasks import get
+    from degpu.tasks.base import ReplicatedInputs
+
     store = Store(tmp_path)
     model, images = sample_inputs()
+    task = get("image-classify-v1")
     k_job = b32(0x99)
 
-    # client
-    manifest = {
-        "task": "image-classify-v1",
-        "model": {"uri": store.put(crypto.encrypt(crypto.model_key(k_job), model)),
-                  "hash": "0x" + crypto.keccak(model).hex()},
-        "items": [{"uri": store.put(crypto.encrypt(crypto.item_key(k_job, i), img)),
-                   "hash": "0x" + crypto.keccak(img).hex()}
-                  for i, img in enumerate(images)],
-    }
-    data_uri = store.put(json.dumps(manifest).encode())
-    on_chain = crypto.data_hash(crypto.keccak(model), [crypto.keccak(img) for img in images])
+    data_uri, on_chain = pack_inputs(store, k_job, task, ReplicatedInputs(model, images))
+    assert on_chain == crypto.data_hash(crypto.keccak(model), [crypto.keccak(img) for img in images])
+    job = SimpleNamespace(dataURI=data_uri, numItems=len(images), dataHash=on_chain)
+    keys = {i: crypto.item_key(k_job, i) for i in range(len(images))}
 
-    def provider_check(m: dict) -> bool:
-        got_model = crypto.decrypt(crypto.model_key(k_job), store.get(m["model"]["uri"]))
-        got_items = [crypto.decrypt(crypto.item_key(k_job, i), store.get(it["uri"]))
-                     for i, it in enumerate(m["items"])]
-        return crypto.data_hash(crypto.keccak(got_model),
-                                [crypto.keccak(x) for x in got_items]) == on_chain
+    shared, got = load_inputs(store, job, task, crypto.shared_key(k_job), keys)
+    assert shared == model and [got[i] for i in range(len(images))] == images
 
-    honest = json.loads(store.get(data_uri))
-    assert provider_check(honest)
+    # The client sends this provider a different image 3 (re-encrypted under the right key,
+    # so decryption still succeeds): the hash check catches it.
+    manifest = json.loads(store.get(data_uri))
+    manifest["items"][3]["uri"] = store.put(crypto.encrypt(crypto.item_key(k_job, 3), b"another image"))
+    cheat = SimpleNamespace(dataURI=store.put(json.dumps(manifest).encode()), numItems=len(images), dataHash=on_chain)
+    with pytest.raises(InputError, match="item 3"):
+        load_inputs(store, cheat, task, crypto.shared_key(k_job), keys)
 
-    # The client sends this provider a different image 3 (re-encrypted under
-    # the right key, so decryption still succeeds): the hash check catches it.
-    cheat = json.loads(store.get(data_uri))
-    cheat["items"][3]["uri"] = store.put(crypto.encrypt(crypto.item_key(k_job, 3), b"another image"))
-    assert not provider_check(cheat)
+    # A manifest that doesn't hash to the on-chain dataHash is refused before any download.
+    other = SimpleNamespace(dataURI=data_uri, numItems=len(images), dataHash=b32(0x01))
+    with pytest.raises(InputError, match="dataHash"):
+        load_inputs(store, other, task, crypto.shared_key(k_job), keys)

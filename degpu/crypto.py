@@ -28,9 +28,11 @@ __all__ = [
     "keccak",
     "hkdf32",
     "job_salt",
-    "model_key",
+    "shared_key",
     "item_key",
+    "word",
     "leaf",
+    "decode_leaves",
     "results_commit",
     "verify_commit",
     "check_commit",
@@ -75,8 +77,9 @@ def job_salt(k_job: bytes) -> bytes:
     return hkdf32(k_job, b"degpu/job-salt")
 
 
-def model_key(k_job: bytes) -> bytes:
-    """SecretBox key for the encrypted model file."""
+def shared_key(k_job: bytes) -> bytes:
+    """SecretBox key for the job's shared blob (e.g. the model). The HKDF label "degpu/model"
+    predates the rename and is kept so the golden vectors stay valid."""
     return hkdf32(k_job, b"degpu/model")
 
 
@@ -89,9 +92,45 @@ def item_key(k_job: bytes, i: int) -> bytes:
 # Commitments (abi.encode + keccak256, must match the Solidity side)
 # ---------------------------------------------------------------------------
 
-def leaf(job_salt: bytes, i: int, label: int) -> bytes:
-    """keccak256(abi.encode(bytes32 jobSalt, uint256 i, uint256 label))."""
-    return keccak(abi_encode(["bytes32", "uint256", "uint256"], [job_salt, i, label]))
+def word(value: bytes | int) -> bytes:
+    """A result word: 32 bytes as-is, or an int as a 32-byte big-endian uint256."""
+    if isinstance(value, int):
+        return value.to_bytes(32, "big")
+    value = bytes(value)
+    if len(value) != 32:
+        raise ValueError("a result word is exactly 32 bytes")
+    return value
+
+
+def leaf(job_salt: bytes, i: int, value: bytes | int) -> bytes:
+    """keccak256(abi.encode(bytes32 jobSalt, uint256 i, bytes32 word)). An int word encodes like
+    a uint256, so for image-classify-v1 this is keccak256(abi.encode(jobSalt, i, uint256 label))."""
+    return keccak(abi_encode(["bytes32", "uint256", "bytes32"], [job_salt, i, word(value)]))
+
+
+def decode_leaves(job_salt: bytes, leaves: list[bytes], candidates: list[bytes]) -> list[bytes | None]:
+    """Recover each leaf's word by trying every candidate word; None if none matches (a wrong
+    salt, index or forged leaf).
+
+    For speed this builds the 96-byte preimage by hand: static types in abi.encode are just
+    32-byte words, so ``abi.encode(jobSalt, i, word)`` is ``jobSalt || i (32 bytes) || word``.
+    tests/test_crypto.py checks that this equals ``leaf``.
+    """
+    if len(job_salt) != 32:
+        raise ValueError("job_salt must be 32 bytes")
+    salt = bytes(job_salt)
+    words = [word(c) for c in candidates]
+    out: list[bytes | None] = []
+    for i, target in enumerate(leaves):
+        target = bytes(target)  # accept HexBytes and other bytes-likes
+        prefix = salt + i.to_bytes(32, "big")
+        found = None
+        for w in words:
+            if _keccak.new(data=prefix + w, digest_bits=256).digest() == target:
+                found = w
+                break
+        out.append(found)
+    return out
 
 
 def results_commit(leaves: list[bytes]) -> bytes:
@@ -109,9 +148,10 @@ def check_commit(v_salt: bytes, leaves: list[bytes]) -> bytes:
     return keccak(abi_encode(["bytes32", "bytes32[]"], [v_salt, list(leaves)]))
 
 
-def data_hash(model_hash: bytes, item_hashes: list[bytes]) -> bytes:
-    """keccak256(abi.encode(bytes32 modelHash, bytes32[] itemHashes))."""
-    return keccak(abi_encode(["bytes32", "bytes32[]"], [model_hash, list(item_hashes)]))
+def data_hash(shared_hash: bytes, item_hashes: list[bytes]) -> bytes:
+    """keccak256(abi.encode(bytes32 sharedHash, bytes32[] itemHashes)); sharedHash is the keccak
+    of the shared blob (e.g. the model), or 32 zero bytes if the job has none."""
+    return keccak(abi_encode(["bytes32", "bytes32[]"], [shared_hash, list(item_hashes)]))
 
 
 # ---------------------------------------------------------------------------

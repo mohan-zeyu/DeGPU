@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {DeGPUBase} from "./DeGPUBase.t.sol";
-import {JobMarket} from "../src/JobMarket.sol";
+import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
 
 /// @notice Golden vectors of INTERFACE.md (v2) section 2. The Python tests check the same values.
 contract EncodingTest is DeGPUBase {
@@ -76,6 +76,6 @@ contract EncodingTest is DeGPUBase {
         market.revealCheck(id, _twoLeaves(), S33);
         _revealV(id, 1, l);
         _publish(id, l);
-        _assertClosed(id, JobMarket.Outcome.Verified);
+        _assertClosed(id, ReplicatedMarket.Outcome.Verified);
     }
 }

@@ -1,9 +1,9 @@
-"""Official runner for task type ``image-classify-v1`` (task type id 1).
+"""Official runner for task type ``image-classify-v1``.
 
-The keccak256 of this file's bytes is registered on-chain as the task type's
-``runnerHash``, and every provider agent refuses a job if its local copy
-hashes differently. Any edit to this file, even whitespace, changes the hash,
-so treat it as frozen.
+This folder is pinned on-chain: the task type's ``runnerHash`` covers every
+.py file in it (see ``ReplicatedTask.runner_hash``), and every provider agent
+refuses a job if its local copy hashes differently. Any edit, even
+whitespace, changes the hash, so treat these files as frozen.
 
 What it does (docs/INTERFACE.md section 5):
 
@@ -17,20 +17,17 @@ What it does (docs/INTERFACE.md section 5):
 
 Each image runs as its own batch of one. That way an item's label depends
 only on the model and that item, never on which other items share the batch.
-Main providers run all N items, verifiers run only the sample and
+Main providers run all N items, verifiers only their range and
 tie-breakers only the mismatched items, so they must all get the same label.
 """
 
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
 from PIL import Image
-
-from degpu.crypto import keccak
 
 NUM_CLASSES = 1000
 
@@ -38,11 +35,6 @@ RESIZE_SHORTER = 256
 CROP = 224
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-
-
-def runner_hash() -> bytes:
-    """keccak256 of this file's own bytes (the on-chain ``runnerHash``)."""
-    return keccak(Path(__file__).read_bytes())
 
 
 def preprocess(image_bytes: bytes) -> np.ndarray:

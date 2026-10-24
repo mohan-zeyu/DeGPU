@@ -3,18 +3,23 @@ pragma solidity ^0.8.28;
 
 import {Script, console} from "forge-std/Script.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
-import {JobMarket} from "../src/JobMarket.sol";
+import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
+import {CheckedMarket} from "../src/CheckedMarket.sol";
+import {NonceChecker} from "../src/checkers/NonceChecker.sol";
 
-/// @notice Deploys the registry and the market with the demo parameters and registers task type 1.
+/// @notice Deploys the registry and both markets with the demo parameters, and registers the
+///         built-in task types: image-classify-v1 (replicated) and nonce-search-v1 (checked).
+///         `Chain.deploy` in degpu/chain.py does the same and also registers every other task
+///         installed under degpu/tasks/; this script is the standalone Foundry path.
 /// Usage (anvil account 0 as owner):
-///   RUNNER_HASH=0x<keccak of runner.py> forge script script/Deploy.s.sol \
+///   RUNNER_HASH=0x<runner hash of image_classify_v1> forge script script/Deploy.s.sol \
 ///     --rpc-url http://127.0.0.1:8545 --broadcast --private-key <anvil key 0>
 contract Deploy is Script {
     uint256 public constant MIN_STAKE = 0.8 ether;
 
-    /// The demo parameters of INTERFACE.md (v2) section 7.
-    function demoParams() public pure returns (JobMarket.Params memory) {
-        return JobMarket.Params({
+    /// The demo parameters of INTERFACE.md section 7.
+    function replicatedParams() public pure returns (ReplicatedMarket.Params memory) {
+        return ReplicatedMarket.Params({
             acceptWindow: 300,
             computeWindow: 600,
             decideWindow: 300,
@@ -31,17 +36,26 @@ contract Deploy is Script {
         });
     }
 
-    function run() external returns (ProviderRegistry registry, JobMarket market) {
+    /// The demo parameters of INTERFACE.md section 8.
+    function checkedParams() public pure returns (CheckedMarket.Params memory) {
+        return CheckedMarket.Params({acceptWindow: 300, workWindow: 300, missedSlashBps: 1000});
+    }
+
+    function run() external returns (ProviderRegistry registry, ReplicatedMarket replicated, CheckedMarket checked) {
         bytes32 runnerHash = vm.envBytes32("RUNNER_HASH");
 
         vm.startBroadcast();
         registry = new ProviderRegistry(MIN_STAKE);
-        market = new JobMarket(address(registry), demoParams());
-        registry.setMarket(address(market));
-        market.addTaskType(runnerHash, "image-classify-v1");
+        replicated = new ReplicatedMarket(address(registry), replicatedParams());
+        checked = new CheckedMarket(address(registry), checkedParams());
+        registry.addMarket(address(replicated));
+        registry.addMarket(address(checked));
+        replicated.addTaskType(runnerHash, "image-classify-v1", 1);
+        checked.addTaskType(new NonceChecker(), "nonce-search-v1", 2);
         vm.stopBroadcast();
 
         console.log("ProviderRegistry:", address(registry));
-        console.log("JobMarket:", address(market));
+        console.log("ReplicatedMarket:", address(replicated));
+        console.log("CheckedMarket:", address(checked));
     }
 }

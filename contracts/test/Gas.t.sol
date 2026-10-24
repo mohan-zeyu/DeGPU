@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {console} from "forge-std/Test.sol";
 import {DeGPUBase} from "./DeGPUBase.t.sol";
-import {JobMarket} from "../src/JobMarket.sol";
+import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
 
 /// @notice Gas of the heavy calls at demo size (N = 200 leaves, 100 per verifier).
 ///         Numbers are execution gas of the call (no 21000 base cost, no calldata cost).
@@ -34,7 +34,7 @@ contract GasTest is DeGPUBase {
 
         console.log("revealCheck (100 leaves) gas:", revealGas);
         console.log("publishResults (200 leaves, Verified, settles) gas:", publishGas);
-        assertEq(uint8(_job(id).outcome), uint8(JobMarket.Outcome.Verified));
+        assertEq(uint8(_job(id).outcome), uint8(ReplicatedMarket.Outcome.Verified));
         assertEq(address(market).balance, 0);
         assertLt(revealGas, 3_000_000); // ~22k per new storage slot: one leaf per item is stored
         assertLt(publishGas, 2_000_000);
@@ -62,7 +62,7 @@ contract GasTest is DeGPUBase {
         market.publishResults(id, m);
         uint256 publishGas = g - gasleft();
         console.log("publishResults (200 leaves, 1 mismatch, starts tie-break) gas:", publishGas);
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.TieBreak));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.TieBreak));
         assertLt(publishGas, 2_000_000);
     }
 }

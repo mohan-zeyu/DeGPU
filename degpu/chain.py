@@ -1,19 +1,23 @@
 """Blockchain plumbing for DeGPU: a local anvil node, contract deployment and
 small web3.py (v8) helpers used by the client, the provider agents and the demo.
 
-Main pieces (docs/INTERFACE.md v2, sections 7 and 8):
+Main pieces (docs/INTERFACE.md sections 6 to 9):
 
 * ``Anvil`` starts and stops a local anvil node on a free port (default
   mnemonic, so account 0 is the deployer, 1 the client, 2-7 providers A-F).
 * ``load_artifact`` reads ABI and bytecode from ``contracts/out/``, running
   ``forge build`` first if the artifacts are missing.
-* ``Chain`` wraps a Web3 connection plus the two deployed contracts. It sends
-  transactions from anvil's unlocked accounts, keeps a per-account tally of the
-  gas spent (so balances can be checked net of gas), reads and decodes market
-  events, and offers the time-travel helpers ``increase_time`` / ``mine``.
-* ``deploy`` deploys ProviderRegistry (minStake 0.8 ETH) and JobMarket with the
-  demo Params, calls ``setMarket`` and registers task type 1
-  (``image-classify-v1`` with the local runner hash).
+* ``Chain`` wraps a Web3 connection plus the deployed contracts: the
+  ProviderRegistry and one market per verification mode, found through the
+  registry (``Chain.markets["replicated"]``, ``Chain.markets["checked"]``). It
+  sends transactions from anvil's unlocked accounts, keeps a per-account tally
+  of the gas spent (so balances can be checked net of gas), resolves task-type
+  ids by name, reads and decodes market events, and offers the time-travel
+  helpers ``increase_time`` / ``mine``.
+* ``Chain.deploy`` deploys the registry (minStake 0.8 ETH) and both markets
+  with the demo Params, and registers every task installed under
+  ``degpu/tasks/`` in its mode's market (deploying its checker contract first
+  for a checked task).
 
 Run ``uv run python -m degpu.chain`` to start a fresh anvil with the contracts
 deployed and print the addresses (handy for the CLI agents / client).
@@ -32,7 +36,7 @@ import time
 from collections import defaultdict
 from enum import IntEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from eth_utils import event_abi_to_log_topic
 from web3 import Web3
@@ -46,22 +50,19 @@ ETHER = 10**18
 ZERO_ADDRESS = "0x" + "00" * 20
 ZERO32 = b"\x00" * 32
 
-# Demo settings (INTERFACE.md sections 6, 7 and 9).
+# Demo settings (INTERFACE.md sections 6 to 10).
 MIN_STAKE = 8 * ETHER // 10  # 0.8 ETH
 PROVIDER_STAKE = 1 * ETHER  # each provider registers with 1 ETH
-PRICE_PER_ITEM = ETHER // 10_000  # 0.0001 ETH per item
-TASK_NAME = "image-classify-v1"
-TASK_TYPE_ID = 1
 
-# Field order of JobMarket.Params.
+# Field order of ReplicatedMarket.Params.
 DEMO_PARAMS = (
     300,  # acceptWindow
-    600,  # computeWindow
+    600,  # computeWindow (+ secondsPerItem x N)
     300,  # decideWindow
-    600,  # checkWindow
+    600,  # checkWindow (+ secondsPerItem x range size)
     300,  # revealWindow
     300,  # publishWindow
-    600,  # tiebreakWindow
+    600,  # tiebreakWindow (+ secondsPerItem x mismatched items)
     2 * ETHER // 1000,  # tiebreakFee 0.002 ETH
     3000,  # wrongSlashBps
     1000,  # missedSlashBps
@@ -70,6 +71,17 @@ DEMO_PARAMS = (
     2,  # numVerifiers
 )
 NUM_VERIFIERS = DEMO_PARAMS[-1]
+
+# Field order of CheckedMarket.Params.
+CHECKED_PARAMS = (
+    300,  # acceptWindow
+    300,  # workWindow (+ secondsPerItem x N)
+    1000,  # missedSlashBps
+)
+
+# Verification modes and the market contract that implements each.
+MARKET_CONTRACTS = {"replicated": "ReplicatedMarket", "checked": "CheckedMarket"}
+MODES = tuple(MARKET_CONTRACTS)
 
 # Account roles for anvil's default mnemonic (INTERFACE.md section 1).
 DEPLOYER_INDEX = 0
@@ -81,6 +93,8 @@ PROVIDER_INDICES = {name: 2 + i for i, name in enumerate(PROVIDER_NAMES)}
 # ---------------------------------------------------------------------------
 # Enums mirrored from the contracts
 # ---------------------------------------------------------------------------
+
+# ReplicatedMarket
 
 class Status(IntEnum):
     NONE = 0
@@ -134,6 +148,46 @@ class Stat(IntEnum):
     CHECKS_COMPLETED = 4
     CHECKS_MISSED = 5
     CHECKS_OUTVOTED = 6
+
+
+# CheckedMarket
+
+class CheckedStatus(IntEnum):
+    NONE = 0
+    OPEN = 1
+    WORKING = 2
+    CLOSED = 3
+
+
+class CheckedOutcome(IntEnum):
+    NONE = 0
+    CANCELLED = 1
+    DELIVERED = 2
+    MAIN_MISSED = 3
+
+
+class CheckedStat(IntEnum):
+    COMPLETED = 0
+    MISSED = 1
+    ITEMS_SOLVED = 2
+    ITEMS_NOT_FOUND = 3
+
+
+class JobRef(NamedTuple):
+    """A job is identified by its market's mode and its id in that market ("checked:1")."""
+
+    mode: str
+    id: int
+
+    def __str__(self) -> str:
+        return f"{self.mode}:{self.id}"
+
+    @classmethod
+    def parse(cls, s: str) -> "JobRef":
+        mode, _, num = s.partition(":")
+        if mode not in MODES or not num.isdigit():
+            raise ValueError(f"expected <mode>:<id> with mode in {MODES}, got {s!r}")
+        return cls(mode, int(num))
 
 
 # ---------------------------------------------------------------------------
@@ -210,11 +264,15 @@ class Anvil:
 
 def load_artifact(name: str) -> tuple[list, str]:
     """Return (abi, bytecode hex) of contract ``name`` from ``contracts/out``.
-    Runs ``forge build`` once if the artifact is missing."""
-    path = OUT_DIR / f"{name}.sol" / f"{name}.json"
-    if not path.exists():
+    Runs ``forge build`` once if the artifact is missing (after editing a contract,
+    run ``forge build`` yourself: an existing artifact is never rebuilt here)."""
+    matches = sorted(OUT_DIR.glob(f"*.sol/{name}.json"))
+    if not matches:
         subprocess.run(["forge", "build"], cwd=CONTRACTS_DIR, check=True, stdout=subprocess.DEVNULL)
-    data = json.loads(path.read_text())
+        matches = sorted(OUT_DIR.glob(f"*.sol/{name}.json"))
+    if not matches:
+        raise FileNotFoundError(f"no artifact for contract {name!r} in {OUT_DIR}")
+    data = json.loads(matches[0].read_text())
     return data["abi"], data["bytecode"]["object"]
 
 
@@ -229,24 +287,26 @@ class TxFailed(RuntimeError):
 class Chain:
     """A Web3 connection with the DeGPU contracts attached."""
 
-    def __init__(self, rpc_url: str, registry_address: str | None = None, market_address: str | None = None):
+    def __init__(self, rpc_url: str, registry_address: str | None = None):
         self.rpc_url = rpc_url
         self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 60}))
         if not self.w3.is_connected():
             raise RuntimeError(f"cannot reach {rpc_url}")
         self.registry_abi, self.registry_bytecode = load_artifact("ProviderRegistry")
-        self.market_abi, self.market_bytecode = load_artifact("JobMarket")
+        self.market_artifacts = {mode: load_artifact(name) for mode, name in MARKET_CONTRACTS.items()}
         self.registry = None
-        self.market = None
+        self.markets: dict[str, Any] = {}
         self._tag: str | None = None
+        self._task_ids: dict[str, int] = {}
         # wei of gas paid by each account through ``send`` (for net-of-gas checks)
         self.gas_spent: dict[str, int] = defaultdict(int)
-        # topic0 -> event name, to decode raw market logs
+        # per mode: topic0 -> event name, to decode raw market logs
         self._topics = {
-            event_abi_to_log_topic(e): e["name"] for e in self.market_abi if e["type"] == "event"
+            mode: {event_abi_to_log_topic(e): e["name"] for e in abi if e["type"] == "event"}
+            for mode, (abi, _) in self.market_artifacts.items()
         }
-        if market_address:
-            self.attach(market_address, registry_address)
+        if registry_address:
+            self.attach(registry_address)
 
     # -- setup ---------------------------------------------------------------
 
@@ -255,31 +315,61 @@ class Chain:
         """anvil's unlocked accounts (default mnemonic)."""
         return list(self.w3.eth.accounts)
 
-    def attach(self, market_address: str, registry_address: str | None = None) -> None:
-        """Use already-deployed contracts. The registry address is read from the market if omitted."""
+    def attach(self, registry_address: str) -> None:
+        """Use already-deployed contracts: the registry, and every market it lists (by mode)."""
         self._tag = None
-        self.market = self.w3.eth.contract(
-            address=Web3.to_checksum_address(market_address), abi=self.market_abi, decode_tuples=True
-        )
-        if registry_address is None:
-            registry_address = self.market.functions.registry().call()
+        self._task_ids = {}
         self.registry = self.w3.eth.contract(
             address=Web3.to_checksum_address(registry_address), abi=self.registry_abi, decode_tuples=True
         )
+        self.markets = {}
+        mode_abi = [{"type": "function", "name": "mode", "stateMutability": "pure", "inputs": [],
+                     "outputs": [{"name": "", "type": "string"}]}]
+        for i in range(self.registry.functions.marketCount().call()):
+            addr = self.registry.functions.marketAt(i).call()
+            mode = self.w3.eth.contract(address=addr, abi=mode_abi).functions.mode().call()
+            if mode in self.market_artifacts:
+                abi = self.market_artifacts[mode][0]
+                self.markets[mode] = self.w3.eth.contract(address=addr, abi=abi, decode_tuples=True)
 
-    def deploy(self, runner_hash: bytes, owner: str | None = None) -> None:
-        """Deploy the registry and the market with the demo parameters, link them
-        and register task type 1 (``image-classify-v1``)."""
+    def deploy(self, owner: str | None = None, tasks=None) -> None:
+        """Deploy the registry and one market per mode with the demo parameters, link them and
+        register ``tasks`` (default: every installed task) in their modes' markets."""
+        from degpu.tasks import all_tasks
+
         owner = owner or self.accounts[DEPLOYER_INDEX]
-        reg_factory = self.w3.eth.contract(abi=self.registry_abi, bytecode=self.registry_bytecode)
-        r = self._wait(reg_factory.constructor(MIN_STAKE).transact({"from": owner}), owner)
-        registry_address = r["contractAddress"]
-        mk_factory = self.w3.eth.contract(abi=self.market_abi, bytecode=self.market_bytecode)
-        r = self._wait(mk_factory.constructor(registry_address, DEMO_PARAMS).transact({"from": owner}), owner)
-        self.attach(r["contractAddress"], registry_address)
-        self.send(self.registry.functions.setMarket(self.market.address), owner)
-        self.send(self.market.functions.addTaskType(runner_hash, TASK_NAME), owner)
-        assert self.market.functions.taskTypeCount().call() == TASK_TYPE_ID
+        registry_address = self._deploy_contract(self.registry_abi, self.registry_bytecode, [MIN_STAKE], owner)
+        params = {"replicated": DEMO_PARAMS, "checked": CHECKED_PARAMS}
+        market_addresses = []
+        for mode, (abi, bytecode) in self.market_artifacts.items():
+            market_addresses.append(self._deploy_contract(abi, bytecode, [registry_address, params[mode]], owner))
+        registry = self.w3.eth.contract(address=registry_address, abi=self.registry_abi)
+        for addr in market_addresses:
+            self.send(registry.functions.addMarket(addr), owner)
+        self.attach(registry_address)
+        for task in (all_tasks().values() if tasks is None else tasks):
+            self.register_task(task, owner)
+
+    def register_task(self, task, owner: str | None = None) -> int:
+        """Owner only: add ``task`` to its mode's market. Returns its task-type id."""
+        owner = owner or self.accounts[DEPLOYER_INDEX]
+        market = self.markets[task.mode]
+        if task.mode == "replicated":
+            fn = market.functions.addTaskType(task.runner_hash(), task.name, task.seconds_per_item)
+        elif task.mode == "checked":
+            abi, bytecode = load_artifact(task.checker_contract)
+            checker = self._deploy_contract(abi, bytecode, [], owner)
+            fn = market.functions.addTaskType(checker, task.name, task.seconds_per_item)
+        else:
+            raise ValueError(f"unknown mode {task.mode!r}")
+        self.send(fn, owner)
+        task_id = market.functions.taskTypeCount().call()
+        self._task_ids[task.name] = task_id
+        return task_id
+
+    def _deploy_contract(self, abi, bytecode, args, owner: str) -> str:
+        factory = self.w3.eth.contract(abi=abi, bytecode=bytecode)
+        return self._wait(factory.constructor(*args).transact({"from": owner}), owner)["contractAddress"]
 
     # -- transactions --------------------------------------------------------
 
@@ -321,52 +411,71 @@ class Chain:
         return self.w3.eth.get_balance(addr)
 
     def provider(self, addr: str):
-        """registry.getProvider(addr) as a named tuple
-        (registered, stake, encPubKey, pricePerItem, locks)."""
+        """registry.getProvider(addr) as a named tuple (registered, stake, encPubKey, locks)."""
         return self.registry.functions.getProvider(addr).call()
 
     def stake(self, addr: str) -> int:
         return self.provider(addr).stake
 
-    def stat(self, addr: str, s: Stat) -> int:
-        return self.registry.functions.statOf(addr, int(s)).call()
+    def price_of(self, addr: str, mode: str, task_id: int) -> int:
+        """Wei per item ``addr`` charges for task type ``task_id`` of the ``mode`` market (0 = not offered)."""
+        return self.registry.functions.priceOf(addr, self.markets[mode].address, task_id).call()
 
-    def job(self, job_id: int):
-        """market.getJob(jobId) as a named tuple (job.status, job.verifiers, ...)."""
-        return self.market.functions.getJob(job_id).call()
+    def stat(self, addr: str, mode: str, s: int) -> int:
+        """Reputation counter ``s`` (a ``Stat`` / ``CheckedStat``) that the ``mode`` market keeps for ``addr``."""
+        return self.registry.functions.statOf(addr, self.markets[mode].address, int(s)).call()
+
+    def job(self, mode: str, job_id: int):
+        """market.getJob(jobId) of the ``mode`` market as a named tuple (job.status, ...)."""
+        return self.markets[mode].functions.getJob(job_id).call()
 
     def range_of(self, job_id: int, slot: int) -> tuple[int, int]:
-        """Items [start, end) covered by verifier ``slot`` of the job."""
-        start, end = self.market.functions.rangeOf(job_id, slot).call()
+        """Items [start, end) covered by verifier ``slot`` of a replicated job."""
+        start, end = self.markets["replicated"].functions.rangeOf(job_id, slot).call()
         return start, end
 
-    def runner_hash_of(self, task_type: int) -> bytes:
-        return bytes(self.market.functions.taskTypeOf(task_type).call()[0])
+    def task_type(self, mode: str, task_id: int):
+        """taskTypeOf(id) of the ``mode`` market: (runnerHash | checker, name, secondsPerItem)."""
+        return self.markets[mode].functions.taskTypeOf(task_id).call()
+
+    def task_id(self, name: str) -> int | None:
+        """On-chain id of the task type called ``name`` in its mode's market (None if not registered)."""
+        if name not in self._task_ids:
+            from degpu.tasks import get
+
+            market = self.markets[get(name).mode]
+            for tid in range(1, market.functions.taskTypeCount().call() + 1):
+                self._task_ids.setdefault(market.functions.taskTypeOf(tid).call()[1], tid)
+        return self._task_ids.get(name)
 
     # -- events --------------------------------------------------------------
 
-    def market_events(self, from_block: int = 0, to_block: int | str = "latest", job_id: int | None = None) -> list:
-        """All JobMarket events in [from_block, to_block], decoded, in chain order.
+    def events(self, mode: str, from_block: int = 0, to_block: int | str = "latest",
+               job_id: int | None = None) -> list:
+        """All job events of the ``mode`` market in [from_block, to_block], decoded, in chain order.
         Each item is web3 EventData: ``ev["event"]``, ``ev["args"]``, ``ev["blockNumber"]``...
         With ``job_id`` only that job's events are returned (jobId is the first indexed topic
-        of every market event)."""
-        flt: dict[str, Any] = {"address": self.market.address, "fromBlock": from_block, "toBlock": to_block}
+        of every job event). Events without a jobId (e.g. TaskTypeAdded) are left out."""
+        market = self.markets[mode]
+        flt: dict[str, Any] = {"address": market.address, "fromBlock": from_block, "toBlock": to_block}
         if job_id is not None:
             flt["topics"] = [None, "0x" + job_id.to_bytes(32, "big").hex()]
         out = []
         for log in self.w3.eth.get_logs(flt):
-            name = self._topics.get(bytes(log["topics"][0]))
+            name = self._topics[mode].get(bytes(log["topics"][0]))
             if name is None:
                 continue
-            out.append(self.market.events[name]().process_log(log))
+            ev = market.events[name]().process_log(log)
+            if "jobId" in ev["args"]:
+                out.append(ev)
         return out
 
     def tag(self) -> str:
-        """Identifies this chain + deployment (genesis hash and market address), so
+        """Identifies this chain + deployment (genesis hash and registry address), so
         state files written against an earlier anvil run can be recognised and reset."""
         if self._tag is None:
             genesis = self.w3.eth.get_block(0)["hash"]
-            self._tag = f"{bytes(genesis).hex()}:{self.market.address}"
+            self._tag = f"{bytes(genesis).hex()}:{self.registry.address}"
         return self._tag
 
 
@@ -375,16 +484,13 @@ def _revert_reason(e: ContractLogicError) -> str:
     return msg.removeprefix("execution reverted: ")
 
 
-def start_local_chain(runner_hash: bytes | None = None, port: int | None = None) -> tuple[Anvil, Chain]:
-    """Start a fresh anvil and deploy everything. Returns (anvil, chain)."""
-    if runner_hash is None:
-        from degpu.tasks.image_classify_v1.runner import runner_hash as local_runner_hash
-
-        runner_hash = local_runner_hash()
+def start_local_chain(port: int | None = None, tasks=None) -> tuple[Anvil, Chain]:
+    """Start a fresh anvil and deploy everything (``tasks``: default every installed task).
+    Returns (anvil, chain)."""
     anvil = Anvil(port=port).start()
     try:
         chain = Chain(anvil.rpc_url)
-        chain.deploy(runner_hash)
+        chain.deploy(tasks=tasks)
     except Exception:
         anvil.stop()
         raise
@@ -392,14 +498,19 @@ def start_local_chain(runner_hash: bytes | None = None, port: int | None = None)
 
 
 def main() -> None:
+    from degpu.tasks import all_tasks
+
     ap = argparse.ArgumentParser(description="Start anvil with the DeGPU contracts deployed.")
     ap.add_argument("--port", type=int, default=8545)
     args = ap.parse_args()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # run the cleanup on `kill` too
     anvil, chain = start_local_chain(port=args.port)
     print(f"anvil      {anvil.rpc_url}")
-    print(f"registry   {chain.registry.address}")
-    print(f"market     {chain.market.address}")
+    print(f"registry   {chain.registry.address}   (pass this as --registry)")
+    for mode, market in chain.markets.items():
+        print(f"{mode:<10} {market.address}")
+    for name, task in all_tasks().items():
+        print(f"task       {name} ({task.mode}, id {chain.task_id(name)})")
     print("Ctrl-C to stop.", flush=True)
     try:
         while anvil.proc and anvil.proc.poll() is None:

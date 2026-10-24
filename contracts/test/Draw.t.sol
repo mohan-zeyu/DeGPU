@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {DeGPUBase} from "./DeGPUBase.t.sol";
-import {JobMarket} from "../src/JobMarket.sol";
+import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
 
 /// @notice Verifier / tie-breaker draws: exclusions, distinctness, inactive providers, and that
 ///         the draw only happens after M has committed. vm.prevrandao varies the randomness.
@@ -88,7 +88,7 @@ contract DrawTest is DeGPUBase {
         bytes32[] memory tl = new bytes32[](1);
         tl[0] = _leaf(0, _label(0));
         _submitTie(id, tl);
-        assertEq(uint8(_job(id).outcome), uint8(JobMarket.Outcome.MainOutvoted));
+        assertEq(uint8(_job(id).outcome), uint8(ReplicatedMarket.Outcome.MainOutvoted));
         assertFalse(registry.isActive(E));
 
         vm.prank(client);
@@ -103,10 +103,48 @@ contract DrawTest is DeGPUBase {
 
     function test_Draw_ClientIsOnlyOtherProvider() public {
         _deactivateAllBut(A, address(0), address(0));
-        vm.prank(client);
-        registry.register{value: STAKE}(bytes32(uint256(99)), PPI);
+        vm.startPrank(client);
+        registry.register{value: STAKE}(bytes32(uint256(99)));
+        registry.setPrice(address(market), TASK, PPI);
+        vm.stopPrank();
         (uint256 id, address[] memory vs) = _smallVerified(A, 1);
         assertEq(vs.length, 0);
-        assertEq(uint8(_job(id).drop), uint8(JobMarket.Drop.NoEligibleVerifier));
+        assertEq(uint8(_job(id).drop), uint8(ReplicatedMarket.Drop.NoEligibleVerifier));
+    }
+
+    /// Only providers that offer the job's task type are drawn, as verifiers or as tie-breaker.
+    function test_Draw_OnlyProvidersOfferingTheTask() public {
+        // B and E stop offering the task; with A as main, C, D and F remain
+        vm.prank(B);
+        registry.setPrice(address(market), TASK, 0);
+        vm.prank(E);
+        registry.setPrice(address(market), TASK, 0);
+        for (uint256 s = 1; s <= 30; s++) {
+            (, address[] memory vs, address t) = _smallMismatch(A, s);
+            for (uint256 k = 0; k < 2; k++) {
+                assertTrue(vs[k] != B && vs[k] != E, "verifier doesn't offer the task");
+            }
+            assertTrue(t != B && t != E && t != address(0), "tie-breaker doesn't offer the task");
+        }
+    }
+
+    /// With too few providers offering the task, a "yes" decision is dropped to unverified.
+    function test_Draw_TooFewOfferingProviders() public {
+        address[3] memory off = [B, C, D];
+        for (uint256 k = 0; k < 3; k++) {
+            vm.prank(off[k]);
+            registry.setPrice(address(market), TASK, 0);
+        }
+        // only E and F offer it besides A: two verifiers are drawn, but no tie-breaker is left
+        (uint256 id, address[] memory vs, address t) = _smallMismatch(A, 3);
+        assertEq(vs.length, 2);
+        assertEq(t, address(0));
+        assertEq(uint8(_job(id).outcome), uint8(ReplicatedMarket.Outcome.NoMajority));
+        // and with only one other provider offering it, no verifier can be drawn at all
+        vm.prank(E);
+        registry.setPrice(address(market), TASK, 0);
+        (uint256 id2, address[] memory vs2) = _smallVerified(A, 4);
+        assertEq(vs2.length, 0);
+        assertEq(uint8(_job(id2).drop), uint8(ReplicatedMarket.Drop.NoEligibleVerifier));
     }
 }

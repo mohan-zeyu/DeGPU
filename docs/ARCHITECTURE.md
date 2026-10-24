@@ -3,48 +3,57 @@
 This document explains how the code fits together: which parts exist, what each part owns, and how they cooperate to run a job. It stays at the level of components and data flow.
 
 - For the exact rules and byte encodings, see [INTERFACE.md](INTERFACE.md).
+- For adding a job type, see [ADDING_A_JOB_TYPE.md](ADDING_A_JOB_TYPE.md).
 - For setup, outcomes and the demo, see the [README](../README.md).
 - For what a single function does, read the code.
 
 ## 1. The big picture
 
-DeGPU has four layers:
+DeGPU separates **what** a provider computes from **how** the platform knows the answer is right:
+
+- **A job type (task)** is a plugin folder under `degpu/tasks/`, for example `image-classify-v1` or `nonce-search-v1`.
+- **A verification mode** is one market contract plus an off-chain driver:
+  - **replicated** (`ReplicatedMarket`): random verifiers re-run the work and the contract compares hashes;
+  - **checked** (`CheckedMarket`): a checker contract verifies each answer on-chain.
+
+The code has five layers:
 
 | Layer | Code | Owns |
 |---|---|---|
-| On-chain | `contracts/src/ProviderRegistry.sol`, `contracts/src/JobMarket.sol` | money, stakes, the job state machine, every judgement |
-| Actors | `degpu/client.py`, `degpu/agent.py` | the secrets and the compute: one client, one agent per provider |
-| Shared libraries | `degpu/crypto.py`, `degpu/storage.py`, `degpu/chain.py`, `degpu/tasks/image_classify_v1/` | encodings, encryption, file storage, talking to the chain, the ML runner |
-| Drivers | `scripts/demo.py`, `tests/`, the `python -m degpu.*` CLIs, `video/capture.py` | starting a chain, creating actors and stepping them |
+| On-chain | `contracts/src/`: `ProviderRegistry`, `MarketBase` with `ReplicatedMarket` and `CheckedMarket`, `IChecker` and `checkers/` | money, stakes, offers, each mode's job state machine, every judgement |
+| Actor shells | `degpu/client.py`, `degpu/agent.py` | one account each: wallet, keys, store, saved state, the tasks an agent offers |
+| Mode drivers | `degpu/modes/` | the off-chain half of each market: who does what in which phase |
+| Tasks | `degpu/tasks/` | what runs: inputs, compute, result format, decoding |
+| Shared libraries and drivers | `degpu/crypto.py`, `degpu/storage.py`, `degpu/chain.py`; `scripts/demo.py`, `tests/`, the CLIs | encodings, encryption, files, talking to the chain; starting a chain and stepping actors |
 
 ```
  ┌──────────────────────────────── on-chain (anvil) ────────────────────────────────┐
- │  ProviderRegistry                                    JobMarket                   │
- │  stake, encPubKey, price,   ◀── lock · slash · bump ── task types, jobs, escrow, │
- │  locks, reputation          ── slashed ETH ─────────▶  draws, comparison,        │
- │                                                        settlement                │
+ │  ProviderRegistry ◀── lock · slash · bump ── MarketBase                          │
+ │  stake, key, locks,  ── slashed ETH ──────▶   ├─ ReplicatedMarket  (re-run)      │
+ │  price per (market,                           └─ CheckedMarket ──▶ IChecker      │
+ │  task), stats per market                         (check on-chain)   NonceChecker │
  └───────────────▲───────────────────────────────────────────────▲──────────────────┘
                  │   transactions · getJob reads · event logs    │
        ┌─────────┴──────────┐                       ┌────────────┴────────────┐
        │ Client             │                       │ ProviderAgent  (× 6)    │
        │ degpu/client.py    │                       │ degpu/agent.py          │
-       │ post, step,        │                       │ main, verifier and      │
-       │ results            │                       │ tie-breaker roles       │
-       └──┬──────────────┬──┘                       └──┬───────────────────┬──┘
-          │              └─────────────┐   ┌───────────┘                   │
-          │                            ▼   ▼                               │
-          │        crypto.py · chain.py · tasks/image_classify_v1/         │
-          │        (shared libraries)                                      │
-          │                                                                │
-          └── put ──▶  Store (degpu/storage.py)  ◀── get ──────────────────┘
-                       encrypted model and images, plaintext manifest
+       └─────────┬──────────┘                       └────────────┬────────────┘
+                 │ one ClientDriver per mode                     │ one ProviderDriver per mode
+       ┌─────────┴───────────────────────────────────────────────┴────────────┐
+       │ degpu/modes/   replicated.py · checked.py   (base.py: the driver API) │
+       └─────────┬───────────────────────────────────────────────┬────────────┘
+                 │ task hooks: prepare, run / solve, present...  │
+       ┌─────────┴───────────────────────────────────────────────┴────────────┐
+       │ degpu/tasks/   image_classify_v1/ · nonce_search_v1/   (base.py)      │
+       └──────────────────────────────────────────────────────────────────────┘
+          shared: crypto.py · chain.py · storage.py (encrypted blobs; replicated mode only)
 ```
 
 The key design rule is that **the actors never talk to each other directly**. Everything goes through three shared channels:
 
 1. **Contract state** (`getJob`) is the single source of truth for where a job is. Every actor picks its next move by reading it.
-2. **Contract events** are the mailbox. They tell a provider it has been picked for a job, and they carry the sealed (encrypted) secrets addressed to it.
-3. **The store** holds the bulk data: the encrypted model and images, plus a plaintext manifest. Only the manifest's URI and a hash go on-chain.
+2. **Contract events** are the mailbox. They tell a provider it has been picked for a job, and carry the sealed secrets addressed to it (replicated mode) or the public items (checked mode).
+3. **The store** holds a replicated job's bulk data: its encrypted shared blob and items, plus a plaintext manifest. Only the manifest's URI and a hash go on-chain.
 
 That is why the same client and agents run unchanged inside one Python process (the demo) or as seven separate processes (the CLI).
 
@@ -54,71 +63,77 @@ That is why the same client and agents run unchanged inside one Python process (
 |---|---|---|
 | `crypto.py` | nothing | everything that hashes, encrypts or seals |
 | `storage.py` | nothing | client, agent, drivers |
-| `tasks/image_classify_v1/runner.py` | `crypto` (to hash its own file) | agent; `chain.start_local_chain` (to register its hash); demo and tests (reference labels) |
-| `tasks/image_classify_v1/decode.py` | nothing | client |
-| `chain.py` | the ABI files in `contracts/out/` | client, agent, drivers |
-| `client.py` | crypto, storage, chain, decode | drivers |
-| `agent.py` | crypto, storage, chain, runner | drivers |
+| `tasks/base.py`, `tasks/__init__.py` | crypto (for the runner hash) | every task; the mode drivers; agent, client, chain (deploy); tests |
+| `tasks/<task>/` | `tasks/base.py` (plus the task's own libraries) | only through the task registry |
+| `chain.py` | the ABI files in `contracts/out/`; the task registry (to deploy) | modes, client, agent, drivers |
+| `modes/base.py`, `modes/<mode>.py` | crypto, chain, `tasks/base.py` (replicated mode: also storage) | agent, client |
+| `client.py`, `agent.py` | chain, modes, storage, tasks | drivers |
 
-The dependencies point one way. The libraries know nothing about the actors, and the client and the agent don't import each other. They agree only through the contract and the spec.
+The dependencies point one way:
+- **Tasks** know nothing about chains, modes or actors. They only implement hooks.
+- **Modes** know the task interface, but no particular task.
+- **The agent and the client** know the modes only through the `PROVIDER_DRIVERS` and `CLIENT_DRIVERS` tables, and never import each other.
 
-Python and Solidity share no code either. Two things tie them together:
-
+Python and Solidity share no code. Three things tie them together:
 - **The ABI.** `forge build` writes it to `contracts/out/`, and `chain.py` loads it from there.
-- **The encodings** in INTERFACE.md §2. `crypto.py` and `JobMarket.sol` each implement them, and both test suites check them against the same golden vectors.
+- **The encodings** in INTERFACE.md §2. Both sides implement them, and both test suites check the same golden vectors.
+- **Each checked task's checker.** The conformance tests check that the task's Python `check` agrees with its deployed contract.
 
 ## 3. The on-chain layer
 
-### 3.1 Two contracts, split by lifetime
+### 3.1 One registry, one market per mode
 
 - **ProviderRegistry** keeps what lasts as long as a provider:
   - its stake;
   - its X25519 public key (`encPubKey`);
-  - its price per item;
-  - a lock counter and the reputation counters.
+  - a lock counter shared across markets;
+  - **its offers:** a price per (market, task type), where 0 means "not offered";
+  - **reputation counters**, kept per market. Each market defines its own counter ids.
 
-  Providers call it directly to register, top up and withdraw.
-- **JobMarket** keeps what lasts as long as a job:
-  - the escrow;
-  - the phase and its deadline;
-  - the commitments;
-  - the drawn verifiers and tie-breaker;
-  - the compared leaves and the final settlement.
+  The owner adds markets with `addMarket`. Only added markets may lock, unlock, slash or bump.
+- **MarketBase** (abstract) holds what every market shares:
+  - the registry link and the owner;
+  - `mode()`, which off-chain code uses to pick a driver;
+  - a task table `{name, secondsPerItem}`;
+  - price pinning from the registry (`_pinPrice`), which reverts if the main provider doesn't offer the task;
+  - `_slash` and `_pay`, with the `Payout` and `ProviderSlashed` events;
+  - `receive()`, which accepts ETH only from the registry.
+- **Each concrete market** adds its own per-task data and its own job state machine:
+  - **ReplicatedMarket:** a runner hash per task, the hidden verify decision, verifier and tie-breaker draws, item-by-item comparison and settlement.
+  - **CheckedMarket:** a checker contract per task, plus a short Open → Working → Closed flow.
 
-  It also holds the task-type table, which maps each task type to its pinned runner hash.
-
-Only the market may change a provider's standing. The registry's `lock`, `unlock`, `slash` and `bump` all require `msg.sender == market`. The owner sets the market address once, right after deployment.
-
-How the two contracts interact:
+How the contracts interact:
 
 | Direction | Calls | Purpose |
 |---|---|---|
-| Market → Registry | `isActive`, `getProvider` | check that M can take jobs; read M's price to pin the job price |
-| Market → Registry | `providerCount`, `providerAt`, `isActive` | random draws of verifiers and the tie-breaker |
-| Market → Registry | `lock`, `unlock` | stake can't be withdrawn while its owner is in an open job |
-| Market → Registry | `slash`, `bump` | punish and record reputation, during a phase or at close |
-| Registry → Market | slashed ETH | `slash` sends the amount to the market, whose `receive()` accepts ETH only from the registry |
+| Market → Registry | `isActive`, `priceOf` | check that M can take jobs and offers the task; pin the job price |
+| ReplicatedMarket → Registry | `providerCount`, `providerAt`, `isActive`, `priceOf` | random draws among the providers that offer the job's task |
+| Market → Registry | `lock`, `unlock` | stake can't be withdrawn while its owner is in an open job, in any market |
+| Market → Registry | `slash`, `bump` | punish, and record reputation under this market |
+| Registry → Market | slashed ETH | `slash` sends the amount to the calling market |
+| CheckedMarket → checker | `check(item, answer)` | one call per solved item inside `submitResults`; any `false` reverts the submission |
 
-Off-chain, the client reads the registry for prices and for the public keys it seals secrets to. Agents use it to register.
+Off-chain, everything starts from the registry address:
+- the client reads prices and public keys;
+- agents register and set their offers;
+- `Chain` finds every market through `marketCount` / `marketAt` and its `mode()`.
 
 ### 3.2 Money flow
 
 ```
-client wallet ──── 2 × price ──────▶ JobMarket escrow (per job)
-provider wallet ── stake ──────────▶ ProviderRegistry
-ProviderRegistry ─ slashed stake ──▶ JobMarket (held in the job's slashedPool, or added at close)
-JobMarket at close ─ payouts ──────▶ main → verifiers → tie-breaker → client (the remainder)
+client wallet ──── deposit ─────────▶ market escrow (per job): replicated 2 × price, checked N × price
+provider wallet ── stake ───────────▶ ProviderRegistry (one stake, shared by all markets)
+ProviderRegistry ─ slashed stake ───▶ the market that slashed
+market at close ── payouts ─────────▶ replicated: main → verifiers → tie-breaker → client (remainder)
+                                      checked:    main (per solved item) → client (remainder)
 ```
 
-- **Payouts:** when a job closes, its escrow plus its slashes is paid out in full. So the market holds no ETH once every job is closed. The Foundry tests and the demo assert this after every job.
-- **Locks:**
-  - A provider's lock count goes up when it accepts a job as main, or is drawn as a verifier or tie-breaker.
-  - It goes down when the provider leaves the job: at close, or early on `BadInput` or `Missed`.
-  - `withdrawStake` requires zero locks, so stake that might still be slashed can't leave.
+- **Payouts:** when a job closes, its escrow plus its slashes is paid out in full. So each market holds no ETH once its jobs are closed, and the tests and the demo assert this after every job.
+- **Locks:** a provider is locked while it takes part in a job, and `withdrawStake` requires zero locks.
 
-### 3.3 The job state machine is the backbone
+### 3.3 The two state machines
 
-Everything in JobMarket hangs off one `status` field per job. Each arrow below is one external function, labelled with its caller.
+**ReplicatedMarket:**
 
 ```
                     createJob (client)
@@ -159,21 +174,28 @@ Everything in JobMarket hangs off one `status` field per job. Each arrow below i
             Closed: MainOutvoted · VerifierOutvoted · BothOutvoted · NoMajority
 ```
 
-If no verifier committed (every slot was dropped), Checking goes straight to Publishing and skips CheckReveal.
+If no verifier committed (every slot was dropped), Checking goes straight to Publishing. The compute, check and tie-break deadlines each add the task's `secondsPerItem` × the number of items that phase must run.
 
-How the contract code is organised around this machine:
+**CheckedMarket:**
 
-- **Every phase function has the same shape.** It checks the status, the caller and the deadline, does its work, then calls `_setPhase(next, window)`. That call also sets the next deadline, so each phase owns exactly one deadline.
-- **`expire` is the single timeout handler.** Anyone may call it once a deadline has passed. It knows what a missed deadline means in each phase: cancel the job, slash M, drop the decision, slash a silent verifier, and so on. The MVP has no keeper, so in practice the demo or the person at the CLI calls it.
-- **Two shared helpers:**
-  - `_advanceChecking` leaves Checking once no verifier is still waiting. `commitCheck`, `reportBadInput` and `expire` all call it.
-  - `_draw` picks a random active provider outside an exclusion list. It is used for both the verifiers and the tie-breaker.
-- **`_close` is the only way into Closed, and the only place money leaves.**
-  - The phase functions only *record facts*: slot states, the outvoted and unresolved bitmasks, `mainOutvoted`, `tieSubmitted` and `slashedPool`.
-  - `_close` judges each party from those facts and the outcome. It works effects-first: mark the job Closed; then slash, bump and unlock; then push the payouts.
-  - So every row of the README's outcome table comes out of this one function.
+```
+  createJob (client, items on-chain) ─▶ Open ── cancel · expire ──▶ Closed: Cancelled
+                                          │ accept (M)
+                                          ▼
+                                       Working ── expire ─────────▶ Closed: MainMissed (M slashed)
+                                          │ submitResults (M): checker.check on every found answer;
+                                          │ one wrong answer reverts the whole call
+                                          ▼
+                                       Closed: Delivered (M paid per solved item)
+```
 
-Per-job data, where it is written and where it is read:
+How the contract code is organised in both markets:
+
+- **Every phase function has the same shape.** It checks the status, the caller and the deadline, does its work, then calls `_setPhase(next, window)`, which also sets the next deadline.
+- **`expire` is the single timeout handler.** Anyone may call it once a deadline has passed. The MVP has no keeper, so in practice the demo or the person at the CLI calls it.
+- **`_close` is the only way into Closed, and the only place money leaves.** The phase functions only *record facts*. In ReplicatedMarket those are slot states, bitmasks and `slashedPool`; in CheckedMarket, `solved`. `_close` then judges each party from those facts, effects first, payouts last.
+
+Per-job data of the replicated market, where it is written and where it is read:
 
 | Data | Written in | Read in |
 |---|---|---|
@@ -185,7 +207,7 @@ Per-job data, where it is written and where it is read:
 | `mismatched`, `mainMismatchLeaves` | `publishResults` | `submitTiebreak`; off-chain by the client (what to share) and T (what to run) |
 | `outvotedMask`, `unresolvedMask`, `mainOutvoted` | `submitTiebreak`, `expire`, and `publishResults` when no T can be drawn | `_close` |
 
-### 3.4 The order in which parties are bound
+### 3.4 The order in which parties are bound (replicated mode)
 
 The protocol works because commitments land in a fixed order:
 
@@ -196,199 +218,240 @@ The protocol works because commitments land in a fixed order:
 5. **`publishResults`:** M's leaves become public last. The contract checks them against step 2 and compares them with the checks stored in step 4.
 6. **`submitTiebreak`:** T answers for the mismatched items only, in one step without a commit.
 
-Two consequences of this order are worth knowing when reading the code. Both are within the course-level scope and are not handled by the code.
+Two consequences of this order are worth knowing. Both are within the course-level scope and are not handled by the code.
 
 - **A caught M can skip publishing.** After step 4, M can tell whether the revealed checks match its own results before it publishes. If it is caught, it can let the deadline pass and take the missed-deadline slash (10%) instead of the wrong-result slash (30%). The client then gets no labels.
 - **Nothing forces T to run the items.** At step 6 both sides' leaves are already public, so T could simply copy one side.
 
+The checked mode needs no ordering at all: an answer is either accepted by the checker or rejected, whoever sees it first.
+
 ## 4. The off-chain actors
 
-### 4.1 Both actors are polling state machines
+### 4.1 Thin shells, one driver per mode
 
-`Client` and `ProviderAgent` are built the same way:
+`Client` and `ProviderAgent` are shells around one account:
+- the client: its wallet, the store, display names and its saved job secrets;
+- the agent: the same, plus its X25519 keypair, its demo behaviour and its offered tasks.
 
-- **Local state:** a `jobs` dict that maps each job id to a JSON-able record. The record holds the secrets (`k_job`, salts, the decision) and progress flags such as `accepted`, `committed` and `published`.
-- **`step()`:**
-  - for each open job, read `getJob` and compare the on-chain status with the local flags;
-  - do the next action;
-  - report whether anything happened.
+Each shell builds one driver per mode found on the chain (`degpu/modes/`) and delegates to it:
 
-  There are no threads, callbacks or subscriptions.
-- **Idempotent:** the local flags, plus the contract's own status checks, make it safe to call `step()` again or to restart.
-- **Restartable:**
-  - Given a state path, each actor saves its records to `.degpu-state/` after every change.
-  - The file is tagged with `Chain.tag()` (genesis hash plus market address), so state from an older anvil run is discarded.
-  - An agent keeps its keypair either way.
+| | `ClientDriver` | `ProviderDriver` |
+|---|---|---|
+| holds | the client's jobs of that mode (`client.jobs[mode]`) | the agent's jobs of that mode (`agent.jobs[mode]`) |
+| `step()` | for each open job: read `getJob`, record the outcome when closed, else `act` | `_scan` the market's new events, then for each open job read `getJob` and `act` (up to 5 actions in a row) |
+| mode-specific | `post`, `act`, `results`, `add_cli_args` | `on_event`, `act` |
+
+Shared properties:
+- **Polling, no callbacks.** `step()` compares the on-chain status with local progress flags and does the next action. There are no threads or subscriptions.
+- **Idempotent.** Local flags, plus the contract's own status checks, make it safe to call `step()` again or to restart.
+- **Restartable.**
+  - Given a state path, each shell saves its jobs to `.degpu-state/`, keyed by mode and then job id.
+  - The file is tagged with `Chain.tag()` (genesis hash plus registry address), so state from an older anvil run is discarded.
+  - Job ids are numbered per market, so a job is named by a `JobRef` such as `checked:1`.
 
 Who calls `step()` decides how the system runs:
-
 - **The CLI daemons** loop `step(); sleep(poll)`.
-- **The demo and `tests/test_e2e.py`** call `drive()`. It steps the client, then each agent, round after round, until the job closes or two rounds pass with no progress. That makes the demo deterministic apart from the random draws.
+- **The demo and `tests/test_e2e.py`** call `drive()`. It steps the client, then each agent, round after round, until the job closes or two rounds pass with no progress.
 
 ### 4.2 How an agent finds its work
 
-The client knows its job ids because it created them. An agent doesn't, so each `step()` starts with `_scan_events`, which reads the market's events since the last block it processed:
+The client knows its job ids because it created them. Each provider driver instead scans its market's events since the last block it processed:
 
-| Event | Meaning for this agent |
-|---|---|
-| `JobCreated` with `main == me` | a new job as main; keep `sealedForMain` |
-| `VerifiersDrawn` listing me | a new job as a verifier; remember my slot |
-| `RangeShared` to me | my verifier secrets have arrived |
-| `TiebreakStarted` naming me | a new job as the tie-breaker; remember the mismatched items |
-| `TiebreakShared` to me | my tie-breaker secrets have arrived |
+| Mode | Event | Meaning for this agent |
+|---|---|---|
+| replicated | `JobCreated` with `main == me` | a new job as main; keep `sealedForMain` |
+| replicated | `VerifiersDrawn` listing me | a new job as a verifier; remember my slot |
+| replicated | `RangeShared` to me | my verifier secrets have arrived |
+| replicated | `TiebreakStarted` naming me | a new job as the tie-breaker |
+| replicated | `TiebreakShared` to me | my tie-breaker secrets have arrived |
+| checked | `JobCreated` with `main == me` | a new job; keep its (public) items |
 
-After the scan, the agent dispatches each open job by role, to `_act_main`, `_act_verifier` or `_act_tiebreaker`.
+Events only answer "am I involved, and what do I need?" The question "what phase is it?" always comes from `getJob`.
 
-Events only answer "am I involved, and what is my secret?" The question "what phase is it?" is always answered by `getJob`, so the agent never depends on the order in which it sees events.
+`agent.task_for(mode, taskType)` maps an on-chain task type to a local task, by its on-chain name. It returns nothing if the agent doesn't offer that task. In the replicated mode the driver also requires the on-chain `runnerHash` to match the local task folder.
 
 ### 4.3 Who acts in which phase
+
+**Replicated mode:**
 
 | Phase | Client | Main M | Verifier | Tie-breaker T |
 |---|---|---|---|---|
 | Open | — | unseal `k_job`, check runner and inputs, `accept` | | |
-| Committing | — | run all items, `commitResults` | | |
+| Committing | — | `task.run` on all items, `commitResults` | | |
 | Deciding | `revealDecision` | wait | | |
-| Checking | `shareRange` for each slot still Assigned | wait | unseal, check its range and inputs, run its range, `commitCheck` (or `reportBadInput`) | |
+| Checking | `shareRange` for each slot still Assigned | wait | unseal, check its range and inputs, `task.run` on its range, `commitCheck` (or `reportBadInput`) | |
 | CheckReveal | — | wait | `revealCheck` | |
 | Publishing | — | `publishResults` | | |
-| TieBreak | `shareTiebreak` | — | — | unseal, check inputs, run the mismatched items, `submitTiebreak` (or `reportBadInput`) |
-| Closed | record the outcome; `results()` decodes the labels | | | |
+| TieBreak | `shareTiebreak` | — | — | unseal, check inputs, `task.run` on the mismatched items, `submitTiebreak` (or `reportBadInput`) |
+| Closed | record the outcome; `results()` decodes leaves with `task.candidates()` | | | |
 
-`expire` is missing from the table because no actor calls it on its own (see 3.3).
+**Checked mode:**
+
+| Phase | Client | Main M |
+|---|---|---|
+| Open | — | check that it offers the task and that the items match `itemsHash`, `accept` |
+| Working | — | `task.solve` each item (None = not found), `submitResults` |
+| Closed | record the outcome; `results()` reads `ResultsSubmitted` and calls `task.present` | |
+
+Neither table has `expire`, because no actor calls it on its own.
 
 ### 4.4 Demo behaviours
 
-The `behavior` flag changes only the agent, never the contract. It hooks in at three places:
+The `behavior` flag changes only the agent, never the contract:
 
-- **`cheat`:** in M's compute step, after the runner, a fraction of the labels are replaced with wrong ones.
-- **`liar`:** in the verifier step, random labels replace the runner's output.
-- **`offline`:** M accepts and then stops. An offline agent never acts as a verifier or tie-breaker either.
+| Behaviour | Replicated mode | Checked mode |
+|---|---|---|
+| `cheat` | M replaces 20% of its words with `task.wrong_output` | M submits `task.wrong_answer` for every item; the checker reverts it |
+| `liar` | a verifier submits `task.random_output` | — |
+| `offline` | M accepts, then stops; never acts as verifier or T | M accepts, then stops |
 
-The demo switches behaviours between scenarios by setting `agent.behavior`.
-
-## 5. The data path: keys, store and input checks
+## 5. The data path (replicated mode): keys, store and input checks
 
 Every secret is derived from one random 32-byte `k_job`, which the client draws in `post()`:
 
 ```
-k_job ─┬─ HKDF "degpu/model"    → model_key   → encrypt the model  → Store → manifest.model.uri
-       ├─ HKDF "degpu/item/<i>" → item_key(i) → encrypt image i    → Store → manifest.items[i].uri
+k_job ─┬─ HKDF "degpu/model"    → shared_key  → encrypt the shared blob → Store → manifest.shared.uri
+       ├─ HKDF "degpu/item/<i>" → item_key(i) → encrypt item i          → Store → manifest.items[i].uri
        └─ HKDF "degpu/job-salt" → job_salt    → mixed into every result leaf
 
-manifest = {task, model: {uri, hash}, items: [{uri, hash}, ...]}   plaintext; hashes are of the plaintexts
-manifest → Store → dataURI                                          on-chain
-dataHash = keccak(abi.encode(modelHash, itemHashes))                on-chain
+manifest = {task, shared: {uri, hash} | null, items: [{uri, hash}, ...]}   plaintext; hashes are of the plaintexts
+manifest → Store → dataURI                                                 on-chain
+dataHash = keccak(abi.encode(sharedHash, itemHashes))                      on-chain
 ```
 
-Each recipient gets a payload sealed to its `encPubKey`. The client reads that key from the registry at the moment it shares, and the payload travels inside an event:
+`pack_inputs` (client) and `load_inputs` (providers) in `degpu/modes/replicated.py` are the only code that knows this layout.
+
+Each recipient gets a payload sealed to its `encPubKey`, read from the registry when the client shares:
 
 | Recipient | Payload | Carried by | Can decrypt |
 |---|---|---|---|
-| M | `k_job` | `JobCreated.sealedForMain` | the model and every item |
-| Verifier slot j | `job_salt`, `model_key`, the keys for its range, `start` and `end` | `RangeShared` | the model and its range |
-| T | `job_salt`, `model_key`, the keys and indices of the mismatched items | `TiebreakShared` | the model and the mismatched items |
+| M | `k_job` | `JobCreated.sealedForMain` | the shared blob and every item |
+| Verifier slot j | `job_salt`, `shared_key`, the keys for its range, `start` and `end` | `RangeShared` | the shared blob and its range |
+| T | `job_salt`, `shared_key`, the keys and indices of the mismatched items | `TiebreakShared` | the shared blob and the mismatched items |
 
-All three provider roles run the same input check (`_load_inputs`) before computing:
+All three roles run the same input check before computing:
 
-1. The task type's on-chain `runnerHash` equals the hash of the local `runner.py`.
+1. The task type's on-chain `runnerHash` equals the hash of the local task folder.
 2. The manifest from the store hashes to the on-chain `dataHash`.
-3. The decrypted model, and each item the role needs, match their manifest hashes.
+3. The decrypted shared blob, and each item the role needs, match their manifest hashes.
 
-If any check fails, M refuses the job (it never accepts it), and a verifier or T calls `reportBadInput`. The on-chain `dataHash` is what lets parties who never talk to each other agree on exactly the same inputs.
+If any check fails, M refuses the job, and a verifier or T calls `reportBadInput`.
 
-## 6. The results path: labels → leaves → comparison → labels
+The checked mode has no data path: its items are public and travel in the `JobCreated` event.
+
+## 6. The results path
+
+**Replicated mode:** words → leaves → comparison → words.
 
 ```
-runner.classify(images)            → labels (0..999)
-crypto.leaf(job_salt, i, label)    → leaf_i (bytes32)
+task.run(state, items)            → one 32-byte word per item (image task: the label)
+crypto.leaf(job_salt, i, word)    → leaf_i
 
 M:  results_commit(all leaves)          → commitResults  ...  publishResults(all leaves)
 V:  check_commit(v_salt, range leaves)  → commitCheck    ...  revealCheck(range leaves)
 T:                                        submitTiebreak(leaves of the mismatched items)
 
-JobMarket compares bytes32 values only; it never sees a label or the salt.
-client: decode_labels(job_salt, published leaves) tries all 1000 labels per item.
+ReplicatedMarket compares bytes32 values only; it never sees a word or the salt.
+client: crypto.decode_leaves(job_salt, leaves, task.candidates()) → task.present(word)
 ```
 
-The leaf is the one result format every component shares. Three properties make it work:
-
-- **Honest providers produce identical leaves.** The runner is deterministic (pinned preprocessing, one CPU thread, one image per batch), and its exact file is pinned on-chain.
-- **Outsiders learn nothing from leaves.** Without `job_salt`, they can't try the 1000 labels.
+Three properties make this work:
+- **Honest providers produce identical leaves.** The task's `run` must be deterministic, and its folder is pinned on-chain.
+- **Outsiders learn nothing from leaves:** without `job_salt` they can't try the candidates.
 - **Leaves can't be moved between items,** because the item index is inside the hash.
 
-## 7. One verified job across the components
+**Checked mode:** answers → checker → answers.
+
+```
+task.solve(item) → 32-byte answer or None
+submitResults(items, answers, found) → checker.check(item, answer) for each found item, on-chain
+client: ResultsSubmitted(answers, found) → task.present(item, answer)
+```
+
+## 7. One job across the components
+
+**A verified replicated job:**
 
 | # | Actor (code) | Action | Emits | Picked up by |
 |---|---|---|---|---|
-| 1 | client `post()` | encrypt and upload to the store; `createJob` with 2 × price | `JobCreated` | M's event scan |
-| 2 | M `_act_main` (Open) | check inputs, `accept` | `JobAccepted` | (M continues in the same step) |
-| 3 | M `_act_main` (Committing) | run all items, `commitResults` | `ResultsCommitted` | the client sees Deciding |
-| 4 | client `step()` | `revealDecision(salt, true)`; the market draws 2 verifiers | `DecisionRevealed`, `VerifiersDrawn` | the verifiers' event scans; the client sees Checking |
-| 5 | client `step()` | `shareRange`, once per slot | `RangeShared` × 2 | each verifier's event scan |
-| 6 | each verifier | run its half, `commitCheck` | `CheckCommitted` | the last commit moves the job to CheckReveal |
-| 7 | each verifier | `revealCheck` | `CheckRevealed` | the last reveal moves the job to Publishing; M sees it |
-| 8 | M | `publishResults` | `ResultsPublished`, then either `Payout` … `JobClosed` (all match) or `TiebreakStarted` | the client, or T's event scan |
-| 9 | client `step()` | `shareTiebreak` | `TiebreakShared` | T's event scan |
-| 10 | T | run the mismatched items, `submitTiebreak`; the market settles | `TiebreakSubmitted`, `ProviderSlashed`, `Payout`, `JobClosed` | the client records the outcome |
-| 11 | client `results()` | read `ResultsPublished` and decode | — | — |
+| 1 | client `post()` → `ReplicatedClient.post` | `task.prepare` / inputs; `pack_inputs`; `createJob` with 2 × price | `JobCreated` | M's event scan |
+| 2 | M `ReplicatedProvider` (Open) | `load_inputs`, `accept` | `JobAccepted` | (M continues in the same step) |
+| 3 | M (Committing) | `task.run` on all items, `commitResults` | `ResultsCommitted` | the client sees Deciding |
+| 4 | client | `revealDecision(salt, true)`; the market draws 2 verifiers that offer the task | `DecisionRevealed`, `VerifiersDrawn` | the verifiers' scans |
+| 5 | client | `shareRange`, once per slot | `RangeShared` × 2 | each verifier's scan |
+| 6 | each verifier | `task.run` on its half, `commitCheck` | `CheckCommitted` | the last commit moves the job to CheckReveal |
+| 7 | each verifier | `revealCheck` | `CheckRevealed` | the last reveal moves the job to Publishing |
+| 8 | M | `publishResults` | `ResultsPublished`, then `Payout` … `JobClosed`, or `TiebreakStarted` | the client, or T's scan |
+| 9 | client | `shareTiebreak` | `TiebreakShared` | T's scan |
+| 10 | T | `task.run` on the mismatched items, `submitTiebreak`; the market settles | `TiebreakSubmitted`, `ProviderSlashed`, `Payout`, `JobClosed` | the client records the outcome |
+| 11 | client `results()` | decode the leaves | — | — |
 
-An unverified job reveals `false` at step 4, goes straight to step 8 and closes as Delivered.
+**A checked (mining) job:**
+
+| # | Actor (code) | Action | Emits | Picked up by |
+|---|---|---|---|---|
+| 1 | client `post()` → `CheckedClient.post` | `task.prepare` → items; `createJob` with N × price | `JobCreated` (with the items) | M's event scan |
+| 2 | M `CheckedProvider` (Open) | check the offer and `itemsHash`, `accept` | `JobAccepted` | (M continues in the same step) |
+| 3 | M (Working) | `task.solve` each item, `submitResults`; the market calls the checker and settles | `ResultsSubmitted`, `Payout` × 2, `JobClosed` | the client records the outcome |
+| 4 | client `results()` | read `ResultsSubmitted` | — | — |
 
 ## 8. Ways to run it
 
 | Mode | Used by | How the pieces share a chain and data |
 |---|---|---|
-| One process | `scripts/demo.py`, `tests/test_e2e.py`, `video/capture.py` | `start_local_chain()` starts anvil and deploys. There is one `Chain`, one `Store` (a temp directory), one `Client` and six `ProviderAgent`s, all stepped by `drive()`. Time travel goes through `Chain.increase_time`. `Chain.gas_spent` tallies gas per account, so balances can be checked net of gas. |
-| Several processes | `python -m degpu.chain`, `python -m degpu.agent`, `python -m degpu.client` | Each process builds its own `Chain` and attaches to the market address, which is the same on every fresh anvil. They share the RPC URL, the `DEGPU_STORE` directory and `.degpu-state/`. |
+| One process | `scripts/demo.py`, `tests/test_e2e.py` | `start_local_chain()` starts anvil and `Chain.deploy()` deploys the registry, both markets and every installed task. There is one `Chain`, one `Store`, one `Client` and six `ProviderAgent`s, all stepped by `drive()`. Time travel goes through `Chain.increase_time`, and `Chain.gas_spent` lets balances be checked net of gas. |
+| Several processes | `python -m degpu.chain`, `python -m degpu.agent`, `python -m degpu.client` | Each process builds its own `Chain` from the registry address, which is the same on every fresh anvil, and finds the markets from it. They share the RPC URL, the `DEGPU_STORE` directory and `.degpu-state/`. |
 
-- **No private keys.** Transactions are sent from anvil's unlocked accounts (`transact({"from": ...})`), so no code handles keys. This is the main thing to change for a public testnet.
-- **Two deploy paths.** Both do the same four steps: deploy the registry; deploy the market with the params; call `setMarket`; call `addTaskType` with the runner hash.
-  - `Chain.deploy` in Python, which everything above uses.
-  - `contracts/script/Deploy.s.sol`, a forge script checked by `Deploy.t.sol`.
+- **No private keys.** Transactions are sent from anvil's unlocked accounts, so no code handles keys. This is the main thing to change for a public testnet.
+- **Two deploy paths.**
+  - `Chain.deploy` (Python) registers every installed task.
+  - `contracts/script/Deploy.s.sol` (a forge script, checked by `Deploy.t.sol`) registers only the built-in ones.
 
 ## 9. Tests by layer
 
 | Layer | Tests | Approach |
 |---|---|---|
-| Contracts | `contracts/test/*.t.sol` | `DeGPUBase` deploys with the demo params and six providers. Tests feed synthetic leaves (no ML) and set `vm.prevrandao` to steer the draws. They are split by concern: Settlement (one test per outcome), Reverts, Draw, Encoding, Gas and Deploy. Most settlement tests end with a shared check (`_assertClosed`): value is conserved, the market holds no ETH, and nobody stays locked. |
-| Python libraries | `tests/test_crypto.py`, `test_storage.py`, `test_runner.py`, `test_decode.py` | Golden vectors (the same ones `Encoding.t.sol` uses), runner determinism and batch independence, and decode round trips. |
-| Integration | `tests/test_e2e.py` | A real anvil and the real runner on 20 images, with the client and the agents stepped together. |
-| Acceptance | `scripts/demo.py` | Five scenarios with exact balance assertions; it exits with code 1 on any failure. |
+| Contracts | `contracts/test/*.t.sol` | `DeGPUBase` deploys the replicated market with the demo params and six providers; tests feed synthetic leaves and steer draws with `vm.prevrandao`. The suites are: Settlement, Reverts, Draw (including offer filtering), Encoding, Gas, Deploy, `TaskTypes` (per-task prices and deadlines, two markets on one registry) and `CheckedMarket` (its own fixture with `NonceChecker`). |
+| Python libraries | `test_crypto.py`, `test_storage.py`, `test_runner.py`, `test_decode.py`, `test_nonce_search.py`, `test_key_search.py` | Golden vectors shared with the Solidity tests, runner determinism, leaf decoding, and the replicated manifest helpers. |
+| Every task | `tests/test_tasks.py` | Conformance tests run once per installed task, so a new task is tested automatically: determinism and batch independence, word format and decoding, runner-hash coverage; for checked tasks, solve/check consistency and agreement with the deployed checker. |
+| Integration | `tests/test_e2e.py` | A real anvil, both modes: replicated jobs on 20 images, plus mining jobs (honest, and cheating then slashed). |
+| Acceptance | `scripts/demo.py` | Seven scenarios with exact balance assertions; it exits with code 1 on any failure. |
 
 ## 10. Things that must stay in sync
 
 | What | Lives in | Kept honest by |
 |---|---|---|
-| Hash and commitment encodings | `crypto.py` and `JobMarket.sol` | golden vectors in INTERFACE.md §2, `Encoding.t.sol` and `test_crypto.py` |
-| Enums (`Status`, `Outcome`, `Drop`, `VState`, `Stat`) | the contracts, and the `IntEnum`s in `chain.py`, matched by position | the e2e tests and the demo |
-| `Params` field order | `JobMarket.Params`, and the `DEMO_PARAMS` tuple in `chain.py` | the e2e tests and the demo |
-| Demo parameter values and the min stake | three copies: `chain.py`, `Deploy.s.sol`, `DeGPUBase.t.sol` | nothing automatic: change all three together |
-| Sealed payload fields | written by `client.py`, read by `agent.py` | INTERFACE.md §3 and the e2e tests |
-| The bytes of `runner.py` | its keccak, registered at deploy | any edit, even whitespace, makes agents refuse jobs on a chain deployed with the old hash; redeploy |
-| ABI | `contracts/out/`, written by `forge build` | `chain.py` builds only when `out/` is missing, so run `forge build` after editing a contract |
+| Hash and commitment encodings | `crypto.py` and `ReplicatedMarket.sol` | golden vectors in INTERFACE.md §2, `Encoding.t.sol` and `test_crypto.py` |
+| A checked task's rule | its Python `check` and its checker contract | `test_tasks.py` (Python vs deployed contract) and the task's golden vector |
+| Enums (`Status`, `Outcome`, `Drop`, `VState`, `Stat`, `Checked*`) | the contracts, and the `IntEnum`s in `chain.py`, matched by position | the e2e tests and the demo |
+| `Params` field order and demo values, and the min stake | the contracts' `Params`; `DEMO_PARAMS` / `CHECKED_PARAMS` / `MIN_STAKE` in `chain.py`; `Deploy.s.sol`; `DeGPUBase.t.sol` | nothing automatic: change them together |
+| Built-in task registration | `Chain.deploy` (from the task registry) and `Deploy.s.sol` (by hand) | `Deploy.t.sol` covers only the forge script |
+| Sealed payload fields | written by `ReplicatedClient`, read by `ReplicatedProvider` | INTERFACE.md §3 and the e2e tests |
+| A replicated task's code | its folder's hash, registered at deploy | any edit makes agents refuse jobs on a chain deployed with the old hash; redeploy |
+| ABI | `contracts/out/`, written by `forge build` | `chain.py` builds only when an artifact is missing, so run `forge build` after editing a contract |
 
 ## 11. Where to extend
 
-- **A second task type.**
-  - The contract side is already generic: `addTaskType(runnerHash, name)`.
-  - The Python side isn't. `agent.py` imports the image-classify runner and checks the manifest's task name, and `client.py` imports its decoder.
-  - A second type needs a small table that maps each task-type id to a runner and a decoder, plus a definition of what its leaf means.
-- **More verifiers.**
-  - `numVerifiers` is a constructor parameter. Ranges, fees and the per-slot bitmasks are all computed from it.
-  - The Python side reads `rangeOf` and `vstate` without assuming two.
-  - Each extra verifier needs one more active provider.
-- **IPFS instead of the local store.** Anything with the same `put(bytes) → uri` and `get(uri) → bytes` interface works. URIs are opaque strings to the rest of the code.
-- **A real network.**
-  - Sign transactions in `Chain.send` instead of using unlocked accounts.
-  - Replace the randomness in `_draw` with VRF.
-  - Run a keeper that calls `expire`.
-- **Large batches.** Posting every leaf and storing every check leaf are the gas bottleneck. A Merkle root with per-item proofs would replace the leaf arrays in `commitResults`, `publishResults` and `revealCheck`.
+- **A new job type for an existing mode:** add one folder under `degpu/tasks/`, plus a checker contract for a checked task. See [ADDING_A_JOB_TYPE.md](ADDING_A_JOB_TYPE.md).
+- **A new verification mode** (for example for unverifiable services such as bandwidth):
+  - a market contract that inherits `MarketBase`;
+  - a module in `degpu/modes/` with its two drivers;
+  - one entry each in `PROVIDER_DRIVERS`, `CLIENT_DRIVERS` and `MARKET_CONTRACTS`;
+  - a task base class for the mode.
+
+  The guide's last section lists the steps.
+- **IPFS instead of the local store:** anything with the same `put(bytes) → uri` and `get(uri) → bytes` interface works.
+- **A real network:**
+  - sign transactions in `Chain.send`;
+  - replace the randomness in `_draw` with VRF;
+  - run a keeper that calls `expire`.
+- **Large replicated outputs:** encrypted result files, or a Merkle root with per-item proofs, instead of enumerable 32-byte words.
 
 ## 12. The `video/` folder
 
-`video/` consumes the core, and nothing depends on it.
+`video/` (on the `video-walkthrough` branch) consumes the core, and nothing depends on it.
 
-1. `capture.py` imports `scripts/demo.py`, runs the five scenarios and saves their output to `capture/`.
+1. `capture.py` imports `scripts/demo.py`, runs its scenarios and saves their output to `capture/`.
 2. `build_data.py` turns that output into `data.js`.
 3. The HTML engine renders the video from `data.js`.
 

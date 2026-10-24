@@ -1,20 +1,26 @@
-"""DeGPU end-to-end demo: five scenarios on a fresh anvil chain.
+"""DeGPU end-to-end demo: seven scenarios on a fresh anvil chain, in both verification modes.
 
     uv run scripts/demo.py
 
-Setup (docs/INTERFACE.md v2, section 9): start anvil, deploy the contracts,
-register providers A-F (1 ETH stake, 0.0001 ETH per item, each with its own
-X25519 key) and use the 200 demo images in assets/images/ with the
-MobileNetV2 model. Every job deposits 2 x price (0.040 ETH) and commits to a
-secret verify yes/no that is revealed only after the main provider committed.
+Setup (docs/INTERFACE.md section 10): start anvil, deploy the registry and both markets with
+every installed task, register providers A-F (1 ETH stake, each with its own X25519 key, each
+offering every task at its default price: 0.0001 ETH per image or puzzle).
 
-Scenarios:
+Replicated mode, task image-classify-v1 (200 demo images, MobileNetV2): every job deposits
+2 x price (0.040 ETH) and commits to a secret verify yes/no that is revealed only after the
+main provider committed.
   1. unverified job (secret "no"), main A, honest
   2. verified job (secret "yes"), main A, all honest: two verifiers re-run
      100 items each; also shows that jobs 1 and 2 looked identical on-chain
   3. cheater caught: main E fakes 20% of its labels; every faked item is caught
   4. lying verifiers: every provider except A answers random labels as verifier
   5. main F goes offline: time travel past the deadline, then expire()
+
+Checked mode, task nonce-search-v1 (mining puzzles at 16 bits of work): every answer is
+verified on-chain by the NonceChecker contract; the deposit is N x price.
+  6. honest mining, main A: 19 solvable puzzles + 1 impossible one; A is paid per solved puzzle
+  7. cheating miner E: its made-up nonces are rejected on-chain; it misses the deadline and
+     expire() slashes it
 
 Everything runs in-process with a deterministic step loop (client first,
 then agents A-F, repeated until the job closes or nothing moves). For each
@@ -43,7 +49,11 @@ from degpu.chain import (
     PROVIDER_STAKE,
     ZERO_ADDRESS,
     Chain,
+    CheckedOutcome,
+    CheckedStat,
+    CheckedStatus,
     Drop,
+    JobRef,
     Outcome,
     Stat,
     Status,
@@ -52,7 +62,11 @@ from degpu.chain import (
 )
 from degpu.client import Client
 from degpu.storage import Store
+from degpu.tasks import get
 from degpu.tasks.image_classify_v1.runner import Runner
+
+IMAGE_TASK = get("image-classify-v1")
+NONCE_TASK = get("nonce-search-v1")
 
 REPO = Path(__file__).resolve().parent.parent
 MODEL_PATH = REPO / "assets" / "mobilenetv2.onnx"
@@ -81,7 +95,7 @@ class World:
     expected_labels: list[int]
     names: dict[str, str] = field(default_factory=dict)  # address -> short name
     failures: list[str] = field(default_factory=list)
-    job_ids: dict[int, int] = field(default_factory=dict)  # scenario -> jobId
+    job_ids: dict[int, JobRef] = field(default_factory=dict)  # scenario -> job
 
     def nm(self, addr: str) -> str:
         return self.names.get(addr, addr[:10])
@@ -134,15 +148,19 @@ def snapshot(world: World) -> dict[str, tuple[int, int, int]]:
     return out
 
 
-def drive(world: World, job_id: int, max_rounds: int = 30):
+CLOSED = {"replicated": Status.CLOSED, "checked": CheckedStatus.CLOSED}
+OUTCOMES = {"replicated": Outcome, "checked": CheckedOutcome}
+
+
+def drive(world: World, ref: JobRef, max_rounds: int = 30):
     """Step the client and every agent until the job closes or two rounds pass with no progress."""
     idle = 0
     for _ in range(max_rounds):
         progressed = world.client.step()
         for ag in world.agents.values():
             progressed |= ag.step()
-        job = world.chain.job(job_id)
-        if job.status == Status.CLOSED:
+        job = world.chain.job(ref.mode, ref.id)
+        if job.status == CLOSED[ref.mode]:
             world.client.step()  # let the client record the outcome
             for ag in world.agents.values():
                 ag.step()
@@ -150,7 +168,7 @@ def drive(world: World, job_id: int, max_rounds: int = 30):
         idle = 0 if progressed else idle + 1
         if idle >= 2:
             return job
-    return world.chain.job(job_id)
+    return world.chain.job(ref.mode, ref.id)
 
 
 def set_behaviors(world: World, default: str = "honest", **overrides: str) -> None:
@@ -158,17 +176,38 @@ def set_behaviors(world: World, default: str = "honest", **overrides: str) -> No
         ag.behavior = overrides.get(name, default)
 
 
-def post(world: World, main: str, verify: bool) -> int:
-    return world.client.post(world.addr(main), MODEL_PATH, world.images, verify)
+def post(world: World, main: str, verify: bool) -> JobRef:
+    """An image-classify-v1 job on the 200 demo images."""
+    return world.client.post(IMAGE_TASK, world.addr(main), IMAGE_TASK.inputs(MODEL_PATH, world.images),
+                             verify=verify)
+
+
+def top_up(world: World, name: str) -> None:
+    """Bring a provider slashed in an earlier scenario back to a 1 ETH stake."""
+    c = world.chain
+    ag = world.agents[name]
+    stake = c.stake(ag.account)
+    if stake < PROVIDER_STAKE:
+        c.send(c.registry.functions.addStake(), ag.account, value=PROVIDER_STAKE - stake)
+        print(f"  {name} tops its stake back up to 1 ETH (+{(PROVIDER_STAKE - stake) / ETHER:g} ETH) before the scenario")
 
 
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
-def describe(world: World, ev) -> str:
+def describe(world: World, mode: str, ev) -> str:
     n, a = ev["event"], ev["args"]
     nm = world.nm
+    if mode == "checked":
+        if n == "JobCreated":
+            return f"client posts {len(a['items'])} puzzles to {nm(a['main'])} (public, on-chain)"
+        if n == "JobAccepted":
+            return "main accepts"
+        if n == "ResultsSubmitted":
+            found = list(a["found"])
+            return (f"main submits {sum(found)} answers ({len(found) - sum(found)} not found); "
+                    f"the NonceChecker accepts every one")
     if n == "JobCreated":
         return f"client posts {a['numItems']} items to {nm(a['main'])} (decision hidden: {bytes(a['verifyCommit']).hex()[:10]}...)"
     if n == "JobAccepted":
@@ -203,28 +242,29 @@ def describe(world: World, ev) -> str:
     if n == "Payout":
         return f"payout {a['amount'] / ETHER:g} ETH -> {nm(a['to'])}"
     if n == "JobClosed":
-        return f"job closed: {Outcome(a['outcome']).name}"
+        return f"job closed: {OUTCOMES[mode](a['outcome']).name}"
     return n
 
 
-def print_timeline(world: World, job_id: int, events: list, notes: list[tuple[int, str]]) -> None:
+def print_timeline(world: World, ref: JobRef, events: list, notes: list[tuple[int, str]]) -> None:
     print("  timeline:")
-    rows = [(ev["blockNumber"], 0, describe(world, ev)) for ev in events]
+    rows = [(ev["blockNumber"], 0, describe(world, ref.mode, ev)) for ev in events]
     rows += [(blk, 1, f"-- {text} --") for blk, text in notes]  # a note sits after its block's events
     for blk, _, text in sorted(rows, key=lambda r: (r[0], r[1])):
         print(f"    block {blk:>4}  {text}")
 
 
-def settle_report(world: World, job_id: int, before: dict, events: list) -> dict[str, tuple[int, int]]:
+def settle_report(world: World, ref: JobRef, before: dict, events: list) -> dict[str, tuple[int, int]]:
     """Print the balance table; return address -> (wallet change net of gas, stake change)."""
     c = world.chain
     after = snapshot(world)
-    job = c.job(job_id)
+    job = c.job(ref.mode, ref.id)
     roles = {job.client: "client", job.main: "main"}
-    for slot, v in enumerate(job.verifiers):
-        roles[v] = f"verifier{slot}"
-    if job.tiebreaker != ZERO_ADDRESS:
-        roles[job.tiebreaker] = "tiebreaker"
+    if ref.mode == "replicated":
+        for slot, v in enumerate(job.verifiers):
+            roles[v] = f"verifier{slot}"
+        if job.tiebreaker != ZERO_ADDRESS:
+            roles[job.tiebreaker] = "tiebreaker"
 
     payouts: dict[str, int] = {}
     slashes: dict[str, int] = {}
@@ -252,7 +292,8 @@ def settle_report(world: World, job_id: int, before: dict, events: list) -> dict
     # Cross-checks that hold for every job: the events explain every balance change.
     # wallet change net of gas == Payout events (minus what the client paid in);
     # stake change == -(ProviderSlashed events)
-    paid_in = 2 * job.price  # every job deposits 2 x price
+    # a replicated job deposits 2 x price, a checked job N x price per item
+    paid_in = 2 * job.price if ref.mode == "replicated" else job.numItems * job.pricePerItem
     mismatches = []
     for addr, (net, dstake) in deltas.items():
         from_events = payouts.get(addr, 0) - (paid_in if addr == job.client else 0)
@@ -262,15 +303,17 @@ def settle_report(world: World, job_id: int, before: dict, events: list) -> dict
             mismatches.append(f"{world.nm(addr)} stake {fmt(dstake)} vs slashed {fmt(slashes.get(addr, 0))}")
     world.check(not mismatches, "balance changes (net of gas) match the Payout / ProviderSlashed events"
                 + (": " + "; ".join(mismatches) if mismatches else ""))
-    world.check(c.balance(c.market.address) == 0, "JobMarket holds no ETH after the job closed")
+    world.check(all(c.balance(m.address) == 0 for m in c.markets.values()), "the markets hold no ETH after the job closed")
     world.check(all(c.provider(world.addr(n)).locks == 0 for n in PROVIDER_NAMES), "no provider is still locked")
     return deltas
 
 
 def expect(world: World, deltas: dict, job, expected: dict[str, tuple[str, str]]) -> None:
     """``expected``: role or name -> (wallet net ETH, stake change ETH). Everyone else: (0, 0)."""
-    role_addr = {"client": job.client, "main": job.main, "tiebreaker": job.tiebreaker}
-    role_addr.update({f"verifier{slot}": v for slot, v in enumerate(job.verifiers)})
+    role_addr = {"client": job.client, "main": job.main}
+    if hasattr(job, "verifiers"):
+        role_addr["tiebreaker"] = job.tiebreaker
+        role_addr.update({f"verifier{slot}": v for slot, v in enumerate(job.verifiers)})
     want = {}
     for who, (w, s) in expected.items():
         addr = role_addr.get(who) or world.addr(who)
@@ -283,15 +326,15 @@ def expect(world: World, deltas: dict, job, expected: dict[str, tuple[str, str]]
                         f"{label}: wallet {fmt(net)} (want {fmt(w)}), stake {fmt(dstake)} (want {fmt(s)})")
 
 
-def finish(world: World, job_id: int, before: dict, start_block: int, notes=()) -> tuple:
-    events = world.chain.market_events(start_block, job_id=job_id)
-    print_timeline(world, job_id, events, list(notes))
-    deltas = settle_report(world, job_id, before, events)
-    return world.chain.job(job_id), deltas
+def finish(world: World, ref: JobRef, before: dict, start_block: int, notes=()) -> tuple:
+    events = world.chain.events(ref.mode, start_block, job_id=ref.id)
+    print_timeline(world, ref, events, list(notes))
+    deltas = settle_report(world, ref, before, events)
+    return world.chain.job(ref.mode, ref.id), deltas
 
 
-def check_labels(world: World, job_id: int) -> None:
-    labels = world.client.results(job_id)
+def check_labels(world: World, ref: JobRef) -> None:
+    labels = world.client.results(ref)
     same = sum(a == b for a, b in zip(labels, world.expected_labels))
     world.check(labels == world.expected_labels,
                 f"decoded labels equal a local Runner run ({same}/{len(labels)} identical)")
@@ -312,39 +355,40 @@ def scenario_1(world: World) -> None:
     header(1, "unverified job (main A, secret decision: no, all honest)")
     set_behaviors(world)
     before, blk = snapshot(world), world.chain.block_number() + 1
-    job_id = world.job_ids[1] = post(world, "A", False)
-    drive(world, job_id)
-    job, deltas = finish(world, job_id, before, blk)
+    ref = world.job_ids[1] = post(world, "A", False)
+    drive(world, ref)
+    job, deltas = finish(world, ref, before, blk)
     world.check(job.outcome == Outcome.DELIVERED, f"outcome {Outcome(job.outcome).name} (want DELIVERED)")
     expect(world, deltas, job, {"client": ("-0.020", "0"), "A": ("0.020", "0")})
-    check_labels(world, job_id)
+    check_labels(world, ref)
 
 
-def show_hidden_decision(world: World, job_ids: list[int]) -> None:
+def show_hidden_decision(world: World, refs: list[JobRef]) -> None:
     """What anyone (including the main provider) sees on-chain right after posting."""
     c = world.chain
     print("  what the chain shows right after posting (the main provider sees the same):")
-    print(f"    {'job':<5}{'deposit (ETH)':>15}{'items':>7}  {'main':<6}{'verifyCommit':<16}")
+    print(f"    {'job':<14}{'deposit (ETH)':>15}{'items':>7}  {'main':<6}{'verifyCommit':<16}")
     rows = []
-    for jid in job_ids:
-        ev = next(e for e in c.market_events(0, job_id=jid) if e["event"] == "JobCreated")
+    for ref in refs:
+        ev = next(e for e in c.events(ref.mode, 0, job_id=ref.id) if e["event"] == "JobCreated")
         value = c.w3.eth.get_transaction(ev["transactionHash"])["value"]
         a = ev["args"]
         rows.append((value, a["numItems"], a["main"]))
-        print(f"    {jid:<5}{value / ETHER:>15.3f}{a['numItems']:>7}  {world.nm(a['main']):<6}"
+        print(f"    {str(ref):<14}{value / ETHER:>15.3f}{a['numItems']:>7}  {world.nm(a['main']):<6}"
               f"0x{bytes(a['verifyCommit']).hex()[:10]}...")
     world.check(len(set(rows)) == 1,
-                f"jobs {job_ids} locked the same deposit for the same main: nothing shows which one is verified")
+                f"jobs {', '.join(map(str, refs))} locked the same deposit for the same main: "
+                f"nothing shows which one is verified")
 
 
 def scenario_2(world: World) -> None:
     header(2, "verified job, honest (main A, secret decision: yes)")
     set_behaviors(world)
     before, blk = snapshot(world), world.chain.block_number() + 1
-    job_id = world.job_ids[2] = post(world, "A", True)
-    show_hidden_decision(world, [world.job_ids[1], job_id])
-    drive(world, job_id)
-    job, deltas = finish(world, job_id, before, blk)
+    ref = world.job_ids[2] = post(world, "A", True)
+    show_hidden_decision(world, [world.job_ids[1], ref])
+    drive(world, ref)
+    job, deltas = finish(world, ref, before, blk)
     world.check(job.outcome == Outcome.VERIFIED, f"outcome {Outcome(job.outcome).name} (want VERIFIED)")
     expect(world, deltas, job, {
         "client": ("-0.040", "0"),
@@ -352,16 +396,16 @@ def scenario_2(world: World) -> None:
         "verifier0": ("0.010", "0"),
         "verifier1": ("0.010", "0"),
     })
-    check_labels(world, job_id)
+    check_labels(world, ref)
 
 
 def scenario_3(world: World) -> None:
     header(3, "cheater caught (main E fakes 20% of labels, secret decision: yes)")
     set_behaviors(world, E="cheat")
     before, blk = snapshot(world), world.chain.block_number() + 1
-    job_id = world.job_ids[3] = post(world, "E", True)
-    drive(world, job_id)
-    job, deltas = finish(world, job_id, before, blk)
+    ref = world.job_ids[3] = post(world, "E", True)
+    drive(world, ref)
+    job, deltas = finish(world, ref, before, blk)
     world.check(job.outcome == Outcome.MAIN_OUTVOTED, f"outcome {Outcome(job.outcome).name} (want MAIN_OUTVOTED)")
     expect(world, deltas, job, {
         "client": ("0.278", "0"),
@@ -371,10 +415,10 @@ def scenario_3(world: World) -> None:
         "tiebreaker": ("0.002", "0"),
     })
     # Every item was re-run, so every faked label was caught.
-    faked = set(world.agents["E"].jobs[job_id].get("cheated", []))
+    faked = set(world.agents["E"].jobs[ref.mode][ref.id].get("cheated", []))
     world.check(set(int(i) for i in job.mismatched) == faked and len(faked) == 40,
                 f"the contract flagged exactly E's {len(faked)} faked items (full coverage, no luck involved)")
-    labels = world.client.results(job_id)
+    labels = world.client.results(ref)
     differ = {i for i, (a, b) in enumerate(zip(labels, world.expected_labels)) if a != b}
     world.check(differ == faked, "decoded labels differ from a local run exactly on the faked items")
     world.check(not world.chain.registry.functions.isActive(job.main).call(),
@@ -385,9 +429,9 @@ def scenario_4(world: World) -> None:
     header(4, "lying verifiers (main A, secret decision: yes, every other provider lies as verifier)")
     set_behaviors(world, default="liar", A="honest")
     before, blk = snapshot(world), world.chain.block_number() + 1
-    job_id = world.job_ids[4] = post(world, "A", True)
-    drive(world, job_id)
-    job, deltas = finish(world, job_id, before, blk)
+    ref = world.job_ids[4] = post(world, "A", True)
+    drive(world, ref)
+    job, deltas = finish(world, ref, before, blk)
     world.check(job.outcome == Outcome.VERIFIER_OUTVOTED,
                 f"outcome {Outcome(job.outcome).name} (want VERIFIER_OUTVOTED)")
     expect(world, deltas, job, {
@@ -397,46 +441,94 @@ def scenario_4(world: World) -> None:
         "verifier1": ("0", "-0.3"),
         "tiebreaker": ("0.002", "0"),
     })
-    check_labels(world, job_id)
+    check_labels(world, ref)
 
 
 def scenario_5(world: World) -> None:
     header(5, "main offline (main F, secret decision: no): time travel, then expire()")
     set_behaviors(world, F="offline")
     c = world.chain
-    f = world.agents["F"]
-    stake = c.stake(f.account)
-    if stake < PROVIDER_STAKE:  # F may have been one of the slashed liars in scenario 4
-        top_up = PROVIDER_STAKE - stake
-        c.send(c.registry.functions.addStake(), f.account, value=top_up)
-        print(f"  F tops its stake back up to 1 ETH (+{top_up / ETHER:g} ETH) before the scenario")
+    top_up(world, "F")  # F may have been one of the slashed liars in scenario 4
     before, blk = snapshot(world), c.block_number() + 1
-    job_id = world.job_ids[5] = post(world, "F", False)
-    job = drive(world, job_id)
+    ref = world.job_ids[5] = post(world, "F", False)
+    job = drive(world, ref)
     world.check(job.status == Status.COMMITTING, f"job stuck in {Status(job.status).name} (want COMMITTING)")
 
     jump = job.deadline - c.now() + 1
     c.increase_time(jump)
     c.mine()
     notes = [(c.block_number(), f"time travel +{jump} s, past the commit deadline")]
-    world.client.expire(job_id)
-    drive(world, job_id)
-    job, deltas = finish(world, job_id, before, blk, notes)
+    world.client.expire(ref)
+    drive(world, ref)
+    job, deltas = finish(world, ref, before, blk, notes)
     world.check(job.outcome == Outcome.MAIN_MISSED, f"outcome {Outcome(job.outcome).name} (want MAIN_MISSED)")
     expect(world, deltas, job, {"client": ("0.100", "0"), "F": ("0", "-0.1")})
 
 
+MINING_PUZZLES = 20
+MINING_DIFFICULTY = 16  # about 65k hashes per puzzle
+
+
+def scenario_6(world: World) -> None:
+    header(6, f"mining, checked mode (main A, {MINING_PUZZLES - 1} puzzles at {MINING_DIFFICULTY} bits + 1 impossible)")
+    set_behaviors(world)
+    c = world.chain
+    before, blk = snapshot(world), c.block_number() + 1
+    items = NONCE_TASK.items(MINING_PUZZLES - 1, MINING_DIFFICULTY, impossible=1)
+    ref = world.job_ids[6] = world.client.post(NONCE_TASK, world.addr("A"), items)
+    drive(world, ref)
+    job, deltas = finish(world, ref, before, blk)
+    world.check(job.outcome == CheckedOutcome.DELIVERED, f"outcome {CheckedOutcome(job.outcome).name} (want DELIVERED)")
+    # paid per solved puzzle: 19 x 0.0001; the impossible puzzle's 0.0001 goes back to the client
+    expect(world, deltas, job, {"client": ("-0.0019", "0"), "A": ("0.0019", "0")})
+    nonces = world.client.results(ref)
+    valid = all(NONCE_TASK.check(item, n.to_bytes(32, "big")) for item, n in zip(items, nonces) if n is not None)
+    world.check(valid and nonces[-1] is None and sum(n is not None for n in nonces) == MINING_PUZZLES - 1,
+                f"the client got {MINING_PUZZLES - 1} valid nonces (e.g. {nonces[0]}) and 'not found' for the impossible puzzle")
+
+
+def scenario_7(world: World) -> None:
+    header(7, "cheating miner, checked mode (main E submits made-up nonces): rejected on-chain, then expire()")
+    set_behaviors(world, E="cheat")
+    c = world.chain
+    top_up(world, "E")  # E was slashed in scenario 3
+    before, blk = snapshot(world), c.block_number() + 1
+    items = NONCE_TASK.items(MINING_PUZZLES, MINING_DIFFICULTY)
+    ref = world.job_ids[7] = world.client.post(NONCE_TASK, world.addr("E"), items)
+    job = drive(world, ref)
+    st = world.agents["E"].jobs[ref.mode][ref.id]
+    world.check(job.status == CheckedStatus.WORKING and "invalid answer" in st.get("rejected", ""),
+                "the NonceChecker rejected E's submission: no wrong answer is ever accepted")
+
+    jump = job.deadline - c.now() + 1
+    c.increase_time(jump)
+    c.mine()
+    notes = [(c.block_number(), f"time travel +{jump} s, past the work deadline")]
+    world.client.expire(ref)
+    drive(world, ref)
+    job, deltas = finish(world, ref, before, blk, notes)
+    world.check(job.outcome == CheckedOutcome.MAIN_MISSED,
+                f"outcome {CheckedOutcome(job.outcome).name} (want MAIN_MISSED)")
+    expect(world, deltas, job, {"client": ("0.100", "0"), "E": ("0", "-0.1")})
+
+
 def print_reputation(world: World) -> None:
     print()
-    print("Reputation counters (ProviderRegistry stats) and stakes:")
-    cols = [("verified", Stat.VERIFIED_COMPLETED), ("unverif", Stat.UNVERIFIED_COMPLETED),
-            ("missed", Stat.MISSED), ("outvoted", Stat.OUTVOTED), ("checks", Stat.CHECKS_COMPLETED),
-            ("chkMiss", Stat.CHECKS_MISSED), ("chkOutv", Stat.CHECKS_OUTVOTED)]
-    print("    " + f"{'':<4}{'stake':>8}" + "".join(f"{n:>10}" for n, _ in cols))
+    print("Reputation counters (ProviderRegistry stats, per market) and stakes:")
+    cols = [("replicated", "verified", Stat.VERIFIED_COMPLETED), ("replicated", "unverif", Stat.UNVERIFIED_COMPLETED),
+            ("replicated", "missed", Stat.MISSED), ("replicated", "outvoted", Stat.OUTVOTED),
+            ("replicated", "checks", Stat.CHECKS_COMPLETED), ("replicated", "chkMiss", Stat.CHECKS_MISSED),
+            ("replicated", "chkOutv", Stat.CHECKS_OUTVOTED),
+            ("checked", "mined", CheckedStat.COMPLETED), ("checked", "minMiss", CheckedStat.MISSED),
+            ("checked", "solved", CheckedStat.ITEMS_SOLVED), ("checked", "notFound", CheckedStat.ITEMS_NOT_FOUND)]
+    print("    " + f"{'':<4}{'stake':>8}" + "".join(f"{n:>9}" for _, n, _ in cols))
     for name in PROVIDER_NAMES:
         a = world.addr(name)
-        stats = "".join(f"{world.chain.stat(a, s):>10}" for _, s in cols)
+        stats = "".join(f"{world.chain.stat(a, mode, s):>9}" for mode, _, s in cols)
         print(f"    {name:<4}{world.chain.stake(a) / ETHER:>8.3f}{stats}")
+
+
+SCENARIOS = (scenario_1, scenario_2, scenario_3, scenario_4, scenario_5, scenario_6, scenario_7)
 
 
 def main() -> int:
@@ -448,9 +540,10 @@ def main() -> int:
     anvil, chain = start_local_chain()
     try:
         with tempfile.TemporaryDirectory(prefix="degpu-store-") as tmp:
-            print(f"  anvil {anvil.rpc_url}, registry {chain.registry.address}, market {chain.market.address}")
+            markets = ", ".join(f"{mode} market {m.address}" for mode, m in chain.markets.items())
+            print(f"  anvil {anvil.rpc_url}, registry {chain.registry.address}, {markets}")
             world = setup(chain, Store(tmp))
-            for scenario in (scenario_1, scenario_2, scenario_3, scenario_4, scenario_5):
+            for scenario in SCENARIOS:
                 scenario(world)
             print_reputation(world)
     finally:

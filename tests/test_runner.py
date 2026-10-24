@@ -11,9 +11,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from degpu import crypto
 from degpu.tasks.image_classify_v1 import runner
-from degpu.tasks.image_classify_v1.runner import NUM_CLASSES, Runner, preprocess, runner_hash
+from degpu.tasks.image_classify_v1.runner import NUM_CLASSES, Runner, preprocess
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 MODEL_PATH = ASSETS / "mobilenetv2.onnx"
@@ -49,12 +48,6 @@ def sample_images(sample_paths):
 
 def test_num_classes():
     assert NUM_CLASSES == 1000
-
-
-def test_runner_hash_is_keccak_of_file():
-    expected = crypto.keccak(Path(runner.__file__).read_bytes())
-    assert runner_hash() == expected
-    assert len(runner_hash()) == 32
 
 
 def jpeg_bytes(w: int, h: int, mode: str = "RGB") -> bytes:

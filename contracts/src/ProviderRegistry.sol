@@ -2,43 +2,40 @@
 pragma solidity ^0.8.28;
 
 /// @title ProviderRegistry
-/// @notice Keeps every compute provider's stake, X25519 encryption key, per-item price and
-///         reputation counters. Only the JobMarket may lock, unlock, slash or bump stats.
+/// @notice Keeps every compute provider's stake, X25519 encryption key, the task types it offers
+///         (with a price per item for each) and its reputation counters. Several markets can use
+///         one registry: each market the owner adds may lock, unlock and slash providers and bump
+///         its own counters.
 /// @dev See docs/INTERFACE.md section 6.
 contract ProviderRegistry {
-    /// Reputation counters. Main providers use the first four, verifiers and tie-breakers the last three.
-    enum Stat {
-        VerifiedCompleted,
-        UnverifiedCompleted,
-        Missed,
-        Outvoted,
-        ChecksCompleted,
-        ChecksMissed,
-        ChecksOutvoted
-    }
-
     struct Provider {
         bool registered;
         uint256 stake;
         bytes32 encPubKey; // X25519 public key used to seal job secrets to this provider
-        uint256 pricePerItem; // wei per item
-        uint256 locks; // number of open jobs this provider takes part in
+        uint256 locks; // number of open jobs this provider takes part in, across all markets
     }
 
     address public immutable owner;
     uint256 public immutable minStake;
-    address public market; // the JobMarket, set once by the owner
+
+    mapping(address => bool) public isMarket;
+    address[] internal marketList;
 
     mapping(address => Provider) internal providers;
     address[] internal providerList;
-    mapping(address => mapping(Stat => uint256)) internal stats;
+    // provider => market => task type => wei per item (0 = not offered)
+    mapping(address => mapping(address => mapping(uint256 => uint256))) internal prices;
+    // provider => market => stat id (defined by each market) => count
+    mapping(address => mapping(address => mapping(uint8 => uint256))) internal stats;
 
-    event ProviderRegistered(address indexed provider, bytes32 encPubKey, uint256 pricePerItem, uint256 stake);
+    event MarketAdded(address indexed market);
+    event ProviderRegistered(address indexed provider, bytes32 encPubKey, uint256 stake);
+    event PriceSet(address indexed provider, address indexed market, uint256 indexed taskType, uint256 pricePerItem);
     event StakeChanged(address indexed provider, uint256 newStake);
     event Slashed(address indexed provider, uint256 amount);
 
     modifier onlyMarket() {
-        require(msg.sender == market, "not market");
+        require(isMarket[msg.sender], "not market");
         _;
     }
 
@@ -52,29 +49,30 @@ contract ProviderRegistry {
         minStake = minStake_;
     }
 
-    /// @notice Owner only, once: tell the registry which JobMarket may lock/slash providers.
-    function setMarket(address market_) external {
+    /// @notice Owner only: allow `market_` to lock, unlock and slash providers.
+    function addMarket(address market_) external {
         require(msg.sender == owner, "not owner");
-        require(market == address(0), "market already set");
         require(market_ != address(0), "zero market");
-        market = market_;
+        require(!isMarket[market_], "market already added");
+        isMarket[market_] = true;
+        marketList.push(market_);
+        emit MarketAdded(market_);
     }
 
     // ------------------------------------------------------------------
     // Provider actions
     // ------------------------------------------------------------------
 
-    /// @notice Join as a provider with at least `minStake` wei of stake.
-    function register(bytes32 encPubKey, uint256 pricePerItem) external payable {
+    /// @notice Join as a provider with at least `minStake` wei of stake. Offer task types with setPrice.
+    function register(bytes32 encPubKey) external payable {
         Provider storage p = providers[msg.sender];
         require(!p.registered, "already registered");
         require(msg.value >= minStake, "stake too low");
         p.registered = true;
         p.stake = msg.value;
         p.encPubKey = encPubKey;
-        p.pricePerItem = pricePerItem;
         providerList.push(msg.sender);
-        emit ProviderRegistered(msg.sender, encPubKey, pricePerItem, msg.value);
+        emit ProviderRegistered(msg.sender, encPubKey, msg.value);
     }
 
     function addStake() external payable onlyRegistered {
@@ -95,8 +93,11 @@ contract ProviderRegistry {
         require(ok, "transfer failed");
     }
 
-    function setPrice(uint256 pricePerItem) external onlyRegistered {
-        providers[msg.sender].pricePerItem = pricePerItem;
+    /// @notice Offer task type `taskType` of `market` at `pricePerItem` wei per item; 0 stops offering it.
+    function setPrice(address market, uint256 taskType, uint256 pricePerItem) external onlyRegistered {
+        require(isMarket[market], "unknown market");
+        prices[msg.sender][market][taskType] = pricePerItem;
+        emit PriceSet(msg.sender, market, taskType, pricePerItem);
     }
 
     function setEncPubKey(bytes32 encPubKey) external onlyRegistered {
@@ -104,7 +105,7 @@ contract ProviderRegistry {
     }
 
     // ------------------------------------------------------------------
-    // JobMarket only
+    // Markets only
     // ------------------------------------------------------------------
 
     function lock(address p) external onlyMarket {
@@ -116,7 +117,7 @@ contract ProviderRegistry {
         providers[p].locks--;
     }
 
-    /// @notice Take `bps` basis points of `p`'s stake and send it to the market.
+    /// @notice Take `bps` basis points of `p`'s stake and send it to the calling market.
     function slash(address p, uint256 bps) external onlyMarket returns (uint256 amount) {
         require(bps <= 10000, "bps > 10000");
         Provider storage pr = providers[p];
@@ -129,8 +130,9 @@ contract ProviderRegistry {
         require(ok, "transfer failed");
     }
 
-    function bump(address p, Stat s) external onlyMarket {
-        stats[p][s]++;
+    /// @notice Add `amount` to the calling market's counter `stat` for provider `p`.
+    function bump(address p, uint8 stat, uint256 amount) external onlyMarket {
+        stats[p][msg.sender][stat] += amount;
     }
 
     // ------------------------------------------------------------------
@@ -143,6 +145,11 @@ contract ProviderRegistry {
         return pr.registered && pr.stake >= minStake;
     }
 
+    /// @notice Wei per item `p` charges for `market`'s task type `taskType` (0 = not offered).
+    function priceOf(address p, address market, uint256 taskType) external view returns (uint256) {
+        return prices[p][market][taskType];
+    }
+
     function providerCount() external view returns (uint256) {
         return providerList.length;
     }
@@ -151,16 +158,24 @@ contract ProviderRegistry {
         return providerList[i];
     }
 
+    function marketCount() external view returns (uint256) {
+        return marketList.length;
+    }
+
+    function marketAt(uint256 i) external view returns (address) {
+        return marketList[i];
+    }
+
     function getProvider(address p)
         external
         view
-        returns (bool registered, uint256 stake, bytes32 encPubKey, uint256 pricePerItem, uint256 locks)
+        returns (bool registered, uint256 stake, bytes32 encPubKey, uint256 locks)
     {
         Provider storage pr = providers[p];
-        return (pr.registered, pr.stake, pr.encPubKey, pr.pricePerItem, pr.locks);
+        return (pr.registered, pr.stake, pr.encPubKey, pr.locks);
     }
 
-    function statOf(address p, Stat s) external view returns (uint256) {
-        return stats[p][s];
+    function statOf(address p, address market, uint8 stat) external view returns (uint256) {
+        return stats[p][market][stat];
     }
 }

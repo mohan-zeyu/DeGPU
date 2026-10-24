@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test, Vm} from "forge-std/Test.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
-import {JobMarket} from "../src/JobMarket.sol";
+import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
 
 /// @notice Shared fixture: registry + market with the demo parameters, six providers A-F with
 ///         1 ETH stake at 0.0001 ETH per item, and a funded client. Jobs default to the demo
@@ -11,7 +11,7 @@ import {JobMarket} from "../src/JobMarket.sol";
 ///         verifiers covers 100 items for 0.01 ETH.
 abstract contract DeGPUBase is Test {
     ProviderRegistry internal registry;
-    JobMarket internal market;
+    ReplicatedMarket internal market;
 
     address internal client;
     address internal stranger;
@@ -52,8 +52,8 @@ abstract contract DeGPUBase is Test {
     bytes32 internal constant PAYOUT_SIG = keccak256("Payout(uint256,address,uint256)");
     bytes32 internal constant SLASHED_SIG = keccak256("ProviderSlashed(uint256,address,uint256)");
 
-    function demoParams() internal pure returns (JobMarket.Params memory) {
-        return JobMarket.Params({
+    function demoParams() internal pure returns (ReplicatedMarket.Params memory) {
+        return ReplicatedMarket.Params({
             acceptWindow: 300,
             computeWindow: 600,
             decideWindow: 300,
@@ -85,11 +85,10 @@ abstract contract DeGPUBase is Test {
         for (uint256 i = 0; i < 6; i++) {
             address p = makeAddr(names[i]);
             vm.deal(p, 10 ether);
-            vm.prank(p);
-            registry.register{value: STAKE}(bytes32(i + 1), PPI);
             providers.push(p);
             tracked.push(p);
         }
+        _registerAll();
         A = providers[0];
         B = providers[1];
         C = providers[2];
@@ -98,11 +97,22 @@ abstract contract DeGPUBase is Test {
         F = providers[5];
     }
 
-    function _deploy(JobMarket.Params memory p) internal {
+    /// Fresh registry + market. secondsPerItem = 0 keeps every deadline equal to the base window.
+    function _deploy(ReplicatedMarket.Params memory p) internal {
         registry = new ProviderRegistry(MIN_STAKE);
-        market = new JobMarket(address(registry), p);
-        registry.setMarket(address(market));
-        market.addTaskType(RUNNER_HASH, "image-classify-v1");
+        market = new ReplicatedMarket(address(registry), p);
+        registry.addMarket(address(market));
+        market.addTaskType(RUNNER_HASH, "image-classify-v1", 0);
+    }
+
+    /// Register every provider with 1 ETH and offer task type TASK at PPI.
+    function _registerAll() internal {
+        for (uint256 i = 0; i < providers.length; i++) {
+            vm.startPrank(providers[i]);
+            registry.register{value: STAKE}(bytes32(i + 1));
+            registry.setPrice(address(market), TASK, PPI);
+            vm.stopPrank();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -166,7 +176,7 @@ abstract contract DeGPUBase is Test {
         );
     }
 
-    function _job(uint256 id) internal view returns (JobMarket.Job memory) {
+    function _job(uint256 id) internal view returns (ReplicatedMarket.Job memory) {
         return market.getJob(id);
     }
 
@@ -275,15 +285,15 @@ abstract contract DeGPUBase is Test {
     // ------------------------------------------------------------------
 
     function _stake(address p) internal view returns (uint256 s) {
-        (, s,,,) = registry.getProvider(p);
+        (, s,,) = registry.getProvider(p);
     }
 
     function _locks(address p) internal view returns (uint256 l) {
-        (,,,, l) = registry.getProvider(p);
+        (,,, l) = registry.getProvider(p);
     }
 
-    function _stat(address p, ProviderRegistry.Stat s) internal view returns (uint256) {
-        return registry.statOf(p, s);
+    function _stat(address p, ReplicatedMarket.Stat s) internal view returns (uint256) {
+        return registry.statOf(p, address(market), uint8(s));
     }
 
     /// Remember balances and stakes, and start recording logs.
@@ -309,9 +319,9 @@ abstract contract DeGPUBase is Test {
 
     /// Checks shared by every closed job: status/outcome, nobody still locked, the market holds no ETH,
     /// value is conserved, and Payout events add up to the deposit plus all slashes.
-    function _assertClosed(uint256 id, JobMarket.Outcome outcome) internal view {
-        JobMarket.Job memory j = _job(id);
-        assertEq(uint8(j.status), uint8(JobMarket.Status.Closed), "status");
+    function _assertClosed(uint256 id, ReplicatedMarket.Outcome outcome) internal view {
+        ReplicatedMarket.Job memory j = _job(id);
+        assertEq(uint8(j.status), uint8(ReplicatedMarket.Status.Closed), "status");
         assertEq(uint8(j.outcome), uint8(outcome), "outcome");
         assertEq(address(market).balance, 0, "market balance");
         for (uint256 i = 0; i < providers.length; i++) {

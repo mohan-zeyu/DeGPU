@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {DeGPUBase} from "./DeGPUBase.t.sol";
-import {JobMarket} from "../src/JobMarket.sol";
+import {ReplicatedMarket} from "../src/ReplicatedMarket.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 
 /// @notice Wrong caller, wrong phase, wrong value, bad commitments, wrong lengths, locked stake and
@@ -26,7 +26,7 @@ contract RevertsTest is DeGPUBase {
         m[0] = _wrong(0, 1);
         id = _runVerified(A, m, _honest(N), _honest(N));
         t = _job(id).tiebreaker;
-        assertEq(uint8(_job(id).status), uint8(JobMarket.Status.TieBreak));
+        assertEq(uint8(_job(id).status), uint8(ReplicatedMarket.Status.TieBreak));
     }
 
     // ------------------------------------------------------------------
@@ -383,32 +383,37 @@ contract RevertsTest is DeGPUBase {
         vm.expectRevert(bytes("not market"));
         registry.slash(A, 10000);
         vm.expectRevert(bytes("not market"));
-        registry.bump(A, ProviderRegistry.Stat.VerifiedCompleted);
+        registry.bump(A, uint8(ReplicatedMarket.Stat.VerifiedCompleted), 1);
         vm.stopPrank();
-        // the owner isn't the market either
+        // the owner isn't a market either
         vm.expectRevert(bytes("not market"));
         registry.slash(A, 10000);
     }
 
-    function test_Registry_SetMarket() public {
+    function test_Registry_AddMarket() public {
         ProviderRegistry r = new ProviderRegistry(MIN_STAKE);
         vm.prank(stranger);
         vm.expectRevert(bytes("not owner"));
-        r.setMarket(address(market));
-        r.setMarket(address(market));
-        vm.expectRevert(bytes("market already set"));
-        r.setMarket(address(market));
-        vm.expectRevert(bytes("market already set"));
-        registry.setMarket(stranger);
+        r.addMarket(address(market));
+        vm.expectRevert(bytes("zero market"));
+        r.addMarket(address(0));
+        r.addMarket(address(market));
+        vm.expectRevert(bytes("market already added"));
+        r.addMarket(address(market));
+        r.addMarket(stranger); // several markets may share one registry
+        assertTrue(r.isMarket(address(market)));
+        assertTrue(r.isMarket(stranger));
+        assertEq(r.marketCount(), 2);
+        assertEq(r.marketAt(1), stranger);
     }
 
     function test_Registry_RegisterRules() public {
         vm.prank(A);
         vm.expectRevert(bytes("already registered"));
-        registry.register{value: STAKE}(bytes32(0), PPI);
+        registry.register{value: STAKE}(bytes32(0));
         vm.prank(stranger);
         vm.expectRevert(bytes("stake too low"));
-        registry.register{value: MIN_STAKE - 1}(bytes32(0), PPI);
+        registry.register{value: MIN_STAKE - 1}(bytes32(0));
         vm.prank(stranger);
         vm.expectRevert(bytes("not registered"));
         registry.addStake{value: 1 ether}();
@@ -417,28 +422,33 @@ contract RevertsTest is DeGPUBase {
         registry.withdrawStake(0);
         vm.prank(stranger);
         vm.expectRevert(bytes("not registered"));
-        registry.setPrice(1);
+        registry.setPrice(address(market), TASK, 1);
         vm.prank(stranger);
         vm.expectRevert(bytes("not registered"));
         registry.setEncPubKey(bytes32(uint256(1)));
         vm.prank(A);
         vm.expectRevert(bytes("amount > stake"));
         registry.withdrawStake(STAKE + 1);
+        vm.prank(A);
+        vm.expectRevert(bytes("unknown market"));
+        registry.setPrice(stranger, TASK, 1);
     }
 
     function test_Registry_ProviderActions() public {
         vm.startPrank(stranger);
-        registry.register{value: MIN_STAKE}(bytes32(uint256(7)), 5);
+        registry.register{value: MIN_STAKE}(bytes32(uint256(7)));
         assertTrue(registry.isActive(stranger));
+        assertEq(registry.priceOf(stranger, address(market), TASK), 0); // offers nothing yet
         registry.addStake{value: 0.2 ether}();
-        registry.setPrice(9);
+        registry.setPrice(address(market), TASK, 9);
         registry.setEncPubKey(bytes32(uint256(8)));
-        (bool reg, uint256 stake, bytes32 key, uint256 price, uint256 locks) = registry.getProvider(stranger);
+        (bool reg, uint256 stake, bytes32 key, uint256 locks) = registry.getProvider(stranger);
         assertTrue(reg);
         assertEq(stake, 1 ether);
         assertEq(key, bytes32(uint256(8)));
-        assertEq(price, 9);
         assertEq(locks, 0);
+        assertEq(registry.priceOf(stranger, address(market), TASK), 9);
+        assertEq(registry.priceOf(stranger, address(market), TASK + 1), 0); // per task type
         registry.withdrawStake(0.3 ether);
         assertFalse(registry.isActive(stranger)); // 0.7 < minStake
         vm.stopPrank();
@@ -450,12 +460,17 @@ contract RevertsTest is DeGPUBase {
     function test_Market_OnlyOwnerAddsTaskType() public {
         vm.prank(stranger);
         vm.expectRevert(bytes("not owner"));
-        market.addTaskType(bytes32(0), "x");
-        uint256 id = market.addTaskType(keccak256("v2"), "image-classify-v2");
+        market.addTaskType(bytes32(0), "x", 0);
+        uint256 id = market.addTaskType(keccak256("v2"), "image-classify-v2", 5);
         assertEq(id, 2);
-        (bytes32 h, string memory name) = market.taskTypeOf(1);
+        assertEq(market.taskTypeCount(), 2);
+        (bytes32 h, string memory name, uint64 spi) = market.taskTypeOf(1);
         assertEq(h, RUNNER_HASH);
         assertEq(name, "image-classify-v1");
+        assertEq(spi, 0);
+        (h, name, spi) = market.taskTypeOf(2);
+        assertEq(h, keccak256("v2"));
+        assertEq(spi, 5);
     }
 
     function test_Market_ReceiveOnlyFromRegistry() public {
@@ -466,9 +481,9 @@ contract RevertsTest is DeGPUBase {
     }
 
     function test_Market_NeedsAVerifier() public {
-        JobMarket.Params memory p = demoParams();
+        ReplicatedMarket.Params memory p = demoParams();
         p.numVerifiers = 0;
         vm.expectRevert(bytes("need a verifier"));
-        new JobMarket(address(registry), p);
+        new ReplicatedMarket(address(registry), p);
     }
 }
