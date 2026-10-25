@@ -176,6 +176,13 @@ def generate_keypair() -> tuple[bytes, bytes]:
     return bytes(sk), bytes(sk.public_key)
 
 
+def keypair_from_wallet(wallet_key: bytes) -> tuple[bytes, bytes]:
+    """The X25519 keypair of the wallet whose private key is ``wallet_key``: derived from it, so a
+    provider needs no second secret and gets the same encryption key on any machine."""
+    sk = PrivateKey(hkdf32(bytes(wallet_key), b"degpu-x25519"))
+    return bytes(sk), bytes(sk.public_key)
+
+
 def seal(pub32: bytes, payload: dict) -> bytes:
     """Encrypt a JSON-serialisable dict so only the holder of ``pub32``'s
     private key can read it. Byte values must already be ``0x``-hex strings.

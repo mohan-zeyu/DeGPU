@@ -47,6 +47,9 @@ class Task:
     seconds_per_item: int = 1
     #: one line for ``client post --help`` and the demo
     description: str = ""
+    #: the ``add_cli_args`` flags that name local files, by dest: "file" (one file) or "files" (a
+    #: folder of files). The app's API takes these as uploads (``POST /api/jobs``, docs/API.md).
+    uploads: dict[str, str] = {}
     #: the task's folder; filled in by the task registry
     folder: Path
 

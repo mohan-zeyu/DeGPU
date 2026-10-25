@@ -10,10 +10,11 @@ Main pieces (docs/INTERFACE.md sections 6 to 9):
 * ``Chain`` wraps a Web3 connection plus the deployed contracts: the
   ProviderRegistry and one market per verification mode, found through the
   registry (``Chain.markets["replicated"]``, ``Chain.markets["checked"]``). It
-  sends transactions from anvil's unlocked accounts, keeps a per-account tally
-  of the gas spent (so balances can be checked net of gas), resolves task-type
-  ids by name, reads and decodes market events, and offers the time-travel
-  helpers ``increase_time`` / ``mine``.
+  sends transactions from anvil's unlocked accounts, or from wallets added with
+  ``add_signer`` (signed here, sent raw: how real users' nodes send), keeps a
+  per-account tally of the gas spent (so balances can be checked net of gas),
+  resolves task-type ids by name, reads and decodes market events, and offers
+  the time-travel helpers ``increase_time`` / ``mine``.
 * ``Chain.deploy`` deploys the registry (minStake 0.8 ETH) and both markets
   with the demo Params, and registers every task installed under
   ``degpu/tasks/`` in its mode's market (deploying its checker contract first
@@ -32,15 +33,17 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 from eth_utils import event_abi_to_log_topic
 from web3 import Web3
 from web3.exceptions import ContractLogicError
+from web3.middleware import SignAndSendRawMiddlewareBuilder
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACTS_DIR = REPO_ROOT / "contracts"
@@ -211,12 +214,19 @@ def free_port() -> int:
 
 class Anvil:
     """A local anvil node running as a subprocess. Use as a context manager
-    or call ``start()`` / ``stop()`` yourself."""
+    or call ``start()`` / ``stop()`` yourself.
 
-    def __init__(self, port: int | None = None, accounts: int = 10, balance_eth: int = 10_000):
+    By default it is a throwaway chain with anvil's well-known mnemonic (the demo and the tests).
+    The network host (``degpu/host.py``) passes its own secret ``mnemonic`` and a ``state`` file,
+    which anvil loads on start and saves every few seconds, so the chain survives restarts."""
+
+    def __init__(self, port: int | None = None, accounts: int = 10, balance_eth: int = 10_000,
+                 *, mnemonic: str | None = None, state: str | Path | None = None):
         self.port = port or free_port()
         self.accounts = accounts
         self.balance_eth = balance_eth
+        self.mnemonic = mnemonic
+        self.state = state
         self.proc: subprocess.Popen | None = None
 
     @property
@@ -230,6 +240,10 @@ class Anvil:
             "--accounts", str(self.accounts),
             "--balance", str(self.balance_eth),
         ]
+        if self.mnemonic:
+            cmd += ["--mnemonic", self.mnemonic]
+        if self.state:
+            cmd += ["--state", str(self.state), "--state-interval", "5"]
         try:
             self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except FileNotFoundError:
@@ -293,21 +307,30 @@ class TxFailed(RuntimeError):
 
 
 class Chain:
-    """A Web3 connection with the DeGPU contracts attached."""
+    """A Web3 connection with the DeGPU contracts attached.
 
-    def __init__(self, rpc_url: str, registry_address: str | None = None):
+    ``artifacts(name) -> (abi, bytecode)`` loads a contract's artifact; by default from
+    ``contracts/out/`` (``load_artifact``). A user's node fetches them from the network host
+    instead, so only the host needs Foundry."""
+
+    def __init__(self, rpc_url: str, registry_address: str | None = None,
+                 artifacts: Callable[[str], tuple[list, str]] | None = None):
         self.rpc_url = rpc_url
         self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 60}))
         if not self.w3.is_connected():
             raise RuntimeError(f"cannot reach {rpc_url}")
-        self.registry_abi, self.registry_bytecode = load_artifact("ProviderRegistry")
-        self.market_artifacts = {mode: load_artifact(name) for mode, name in MARKET_CONTRACTS.items()}
+        self._artifacts = artifacts or load_artifact
+        self.registry_abi, self.registry_bytecode = self._artifacts("ProviderRegistry")
+        self.market_artifacts = {mode: self._artifacts(name) for mode, name in MARKET_CONTRACTS.items()}
         self.registry = None
         self.markets: dict[str, Any] = {}
         self._tag: str | None = None
         self._task_ids: dict[str, int] = {}
         # wei of gas paid by each account through ``send`` (for net-of-gas checks)
         self.gas_spent: dict[str, int] = defaultdict(int)
+        # One transaction at a time: a node sends from several threads, and each send waits
+        # for its receipt, so the next one always gets the right nonce.
+        self._send_lock = threading.RLock()
         # per mode: topic0 -> event name, to decode raw market logs
         self._topics = {
             mode: {event_abi_to_log_topic(e): e["name"] for e in abi if e["type"] == "event"}
@@ -366,7 +389,7 @@ class Chain:
             compare = Compare.SIMILAR if task.compare == "similar" else Compare.EXACT
             fn = market.functions.addTaskType(task.runner_hash(), task.name, task.seconds_per_item, int(compare))
         elif task.mode == "checked":
-            abi, bytecode = load_artifact(task.checker_contract)
+            abi, bytecode = self._artifacts(task.checker_contract)
             checker = self._deploy_contract(abi, bytecode, [], owner)
             fn = market.functions.addTaskType(checker, task.name, task.seconds_per_item)
         else:
@@ -378,18 +401,27 @@ class Chain:
 
     def _deploy_contract(self, abi, bytecode, args, owner: str) -> str:
         factory = self.w3.eth.contract(abi=abi, bytecode=bytecode)
-        return self._wait(factory.constructor(*args).transact({"from": owner}), owner)["contractAddress"]
+        with self._send_lock:
+            return self._wait(factory.constructor(*args).transact({"from": owner}), owner)["contractAddress"]
 
     # -- transactions --------------------------------------------------------
 
+    def add_signer(self, account) -> str:
+        """Sign transactions from ``account`` (an eth_account ``LocalAccount``, e.g. an unlocked
+        wallet) here and send them raw, instead of asking the node to sign. ``send`` then works
+        for that address on any network. Returns the address."""
+        self.w3.middleware_onion.inject(SignAndSendRawMiddlewareBuilder.build(account), layer=0)
+        return account.address
+
     def send(self, fn, sender: str, value: int = 0) -> dict:
-        """Send contract call ``fn`` from the unlocked account ``sender`` and wait
-        for the receipt. Raises ``TxFailed`` with the revert reason on failure."""
-        try:
-            tx_hash = fn.transact({"from": sender, "value": value})
-        except ContractLogicError as e:  # web3 estimates gas first, which surfaces the revert
-            raise TxFailed(_revert_reason(e)) from None
-        return self._wait(tx_hash, sender)
+        """Send contract call ``fn`` from ``sender`` (an unlocked anvil account or an added
+        signer) and wait for the receipt. Raises ``TxFailed`` with the revert reason on failure."""
+        with self._send_lock:
+            try:
+                tx_hash = fn.transact({"from": sender, "value": value})
+            except ContractLogicError as e:  # web3 estimates gas first, which surfaces the revert
+                raise TxFailed(_revert_reason(e)) from None
+            return self._wait(tx_hash, sender)
 
     def _wait(self, tx_hash, sender: str) -> dict:
         receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)

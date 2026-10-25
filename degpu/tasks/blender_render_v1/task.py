@@ -43,6 +43,7 @@ class BlenderRender(SimilarTask):
     default_price = ETHER // 1000  # 0.001 ETH per frame
     seconds_per_item = 30
     output_suffix = ".png"
+    uploads = {"scene": "file"}
 
     def __init__(self):
         self._available: bool | None = None

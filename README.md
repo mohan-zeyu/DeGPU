@@ -33,7 +33,8 @@ Further reading:
 - How the code fits together: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - **Adding a job type:** [`docs/ADDING_A_JOB_TYPE.md`](docs/ADDING_A_JOB_TYPE.md). It is one folder under `degpu/tasks/`, plus a small checker contract for checked jobs.
 - Interface spec (names, encodings, rules): [`docs/INTERFACE.md`](docs/INTERFACE.md).
-- Run everything: `uv run scripts/demo.py`.
+- **The app's HTTP API** (for the CLI and the GUI): [`docs/API.md`](docs/API.md). Building the GUI on it (screens, calls, types): [`docs/FRONTEND.md`](docs/FRONTEND.md).
+- Run everything: `uv run scripts/demo.py`. Use it with classmates on several laptops: [Using it on a network](#using-it-on-a-network).
 
 ---
 
@@ -179,7 +180,7 @@ The exact rules are in `docs/INTERFACE.md`, sections 7 and 8.
 
 ```bash
 brew install foundry                    # forge, anvil, cast (or: curl -L https://foundry.paradigm.xyz | bash && foundryup)
-uv sync                                 # Python 3.12 venv with web3, pynacl, onnxruntime, pillow, numpy, pycryptodome, pytest
+uv sync                                 # Python 3.12 venv with web3, pynacl, onnxruntime, pillow, numpy, pycryptodome, fastapi, pytest
 uv run scripts/fetch_demo_assets.py     # MobileNetV2 ONNX (~14 MB) + 200 Imagenette photos into assets/
 brew install --cask blender             # optional: Blender 5.2 for the render jobs (without it they are skipped)
 uv run scripts/calibrate_render.py      # with Blender: measure honest vs cheating renders, check the threshold
@@ -245,6 +246,58 @@ How the processes find each other:
 - The client keeps its job secrets in `.degpu-state/client-<address>.json`, including each image job's secret decision and salt.
 - All processes must share the same store directory (`DEGPU_STORE`).
 
+## Using it on a network
+
+This is the product path: several laptops on one Wi-Fi, each user with their own wallet, no time travel. One laptop is the **host**. It runs the shared chain, the shared (encrypted) file store and a **faucet**, which gives every new wallet 2 test ETH once. Test ETH has no value. We don't use real ETH: the contracts aren't audited, and every step would cost real fees.
+
+On the host laptop (needs Foundry):
+
+```bash
+uv run degpu host                       # prints the join URL, e.g. http://192.168.1.20:8600
+```
+
+On every user's laptop, the host's too (needs only `uv` and this repo, plus Blender to offer renders):
+
+```bash
+uv run degpu wallet new alice           # or: uv run degpu wallet import alice  (asks for your private key, hidden)
+uv run degpu app --network http://192.168.1.20:8600 --wallet alice    # asks the password; keep it running
+```
+
+Then open **<http://127.0.0.1:8700>** in a browser: the GUI does everything below with buttons. You can also start the app without a wallet (`uv run degpu app --locked`), then create, import or unlock one in the GUI.
+
+The same actions as commands:
+
+In another terminal:
+
+```bash
+uv run degpu faucet                     # 2 test ETH, once per wallet
+uv run degpu status
+
+# sell compute
+uv run degpu provider register --stake 1   # offers every task that runs on this laptop, at its default price
+uv run degpu provider serve on             # from now on the app accepts and runs jobs by itself
+uv run degpu provider show
+
+# buy compute
+uv run degpu market providers
+uv run degpu client post key-search-v1 --main 0x99Fa --keys 10 --wait     # the first characters of the address are enough
+uv run degpu client post image-classify-v1 --main 0x99Fa --limit 20 --verify --wait
+uv run degpu client jobs
+uv run degpu client status replicated:1
+uv run degpu client results replicated:1
+uv run degpu log -f                        # what the app does, automatic steps included
+```
+
+- **Manual actions are commands; automatic steps run in the app.** A client's app reveals the hidden decision, shares keys with verifiers and reviews frames. A provider's app accepts, computes and submits. Keep the app open while your jobs run.
+- **The CLI only calls the app's API** ([`docs/API.md`](docs/API.md)), and the GUI will do the same. `--json` and `--app` go before the command: `uv run degpu --json client jobs`.
+- **A verified job needs 3 online providers** offering the task besides the client (the main and 2 verifiers), and a 4th for a tie-break. With fewer, the job runs unverified.
+- **To stop selling,** run `provider serve off` and set your prices to 0 (`provider price key-search-v1 0`). Otherwise you can still be drawn as a verifier and get slashed for not answering.
+- **Deadlines are real time:** 5–10 minutes per phase. If a provider disappears, run `client expire <job>` after the deadline.
+- **Where things are kept:** wallets and job secrets in `~/.degpu/` (`DEGPU_HOME`), the host's chain and files in `~/.degpu/host/`. `degpu host --fresh` starts a new chain.
+- **Firewall:** macOS may ask whether Python may accept incoming connections on the host. Allow it.
+
+The older commands (`python -m degpu.chain / agent / client`) still run the local demo setup on a throwaway chain.
+
 ## Repository layout
 
 ```
@@ -252,14 +305,18 @@ contracts/src/          ProviderRegistry.sol, MarketBase.sol, ReplicatedMarket.s
                         IChecker.sol, checkers/KeySearchChecker.sol
 contracts/test/         Foundry tests (Settlement, Reverts, Draw, Encoding, Gas, Deploy, TaskTypes, CheckedMarket)
 contracts/script/       Deploy.s.sol (RUNNER_HASH=0x.. forge script ... --broadcast)
-degpu/                  chain.py, agent.py, client.py, crypto.py, storage.py
+degpu/                  chain.py, agent.py, client.py, crypto.py, storage.py,
+                        wallet.py, host.py, node.py, api.py, cli.py (the product path: `degpu ...`)
 degpu/modes/            base.py (driver API), replicated.py, checked.py
 degpu/tasks/            base.py (task API), image_classify_v1/ (task.py, runner.py), key_search_v1/,
                         blender_render_v1/ (task.py, render.py, similarity.py)
 scripts/                fetch_demo_assets.py, demo.py, make_demo_scene.py (runs in Blender), calibrate_render.py
 tests/                  test_crypto, test_storage, test_runner, test_decode, test_key_search, test_similarity,
-                        test_tasks (conformance, every task), test_e2e; fake_render/ (a test-only similar task)
-docs/                   ARCHITECTURE.md, ADDING_A_JOB_TYPE.md, INTERFACE.md (v4)
+                        test_tasks (conformance, every task), test_e2e; fake_render/ (a test-only similar task);
+                        test_wallet, test_host, test_app (host + five users through the API)
+docs/                   ARCHITECTURE.md, ADDING_A_JOB_TYPE.md, INTERFACE.md (v4), API.md (the app's HTTP API),
+                        FRONTEND.md (how the GUI uses it)
+frontend/               the GUI (React + Vite + TypeScript); `npm run build` writes degpu/web/, which the app serves
 ```
 
 ## Known limitations
@@ -286,4 +343,7 @@ docs/                   ARCHITECTURE.md, ADDING_A_JOB_TYPE.md, INTERFACE.md (v4)
   - That fits up to the 1,000-item limit; the upgrade path is a Merkle root plus per-item proofs.
 - **Push payouts.** A recipient contract that rejects ETH would block a job's settlement. All demo participants are plain accounts.
 - **Build setting.** The contracts are compiled without via-IR (`foundry.toml`), which keeps `ReplicatedMarket` under the 24 KB contract-size limit.
-- **Storage** is a local directory standing in for IPFS. There is no web UI and no testnet deployment yet.
+- **The network host is trusted.** One laptop runs the chain, so its owner could rewrite it or stop it. It can't read or alter files (they are encrypted and hash-checked), but it could withhold them. A public testnet such as Sepolia removes the chain part: only the network settings change, not the code.
+- **The faucet pays once per address,** and anyone can make new addresses. Fine for test ETH; a real network has no faucet.
+- **Storage** is the host's folder over HTTP, standing in for IPFS.
+- **The GUI** runs only in the user's own browser, against their own app on 127.0.0.1. There are no accounts or logins beyond the wallet's password.

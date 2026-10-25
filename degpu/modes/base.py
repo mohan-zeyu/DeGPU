@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from degpu.chain import JobRef, TxFailed
+from degpu.storage import StoreUnavailable
 
 if TYPE_CHECKING:
     from degpu.agent import ProviderAgent
@@ -60,6 +61,9 @@ class ProviderDriver:
                     did = self.act(job_id, st, job)
                 except TxFailed as e:
                     self.log(job_id, f"transaction failed: {e}")
+                    did = False
+                except StoreUnavailable as e:  # a network hiccup: try again on the next step
+                    self.log(job_id, str(e))
                     did = False
                 except Exception as e:  # e.g. the task's code cannot handle an item
                     st["error"] = f"{type(e).__name__}: {e}"

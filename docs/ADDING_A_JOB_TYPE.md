@@ -119,7 +119,7 @@ class MyPuzzle(CheckedTask):
     default_price = ETHER // 10_000  # wei per item that agents offer by default
     seconds_per_item = 2             # extra deadline time per item
 
-    def add_cli_args(self, parser):  # flags for `client post my-puzzle-v1`
+    def add_cli_args(self, parser):  # flags for `client post my-puzzle-v1` (and the API's form fields)
         parser.add_argument("--count", type=int, default=10)
 
     def prepare(self, args) -> list[bytes]:  # CLI flags -> items
@@ -180,6 +180,7 @@ class MyModel(ReplicatedTask):
     description = "one line"
     default_price = ETHER // 10_000
     seconds_per_item = 1
+    uploads = {"model": "file", "inputs": "files"}  # flags that name files: the app's API takes them as uploads
 
     def add_cli_args(self, parser): ...
     def prepare(self, args) -> ReplicatedInputs:      # shared blob (or None) + item blobs

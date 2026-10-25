@@ -26,6 +26,7 @@ class ImageClassify(ReplicatedTask):
     description = "top-1 ImageNet label per image, with your ONNX model"
     default_price = ETHER // 10_000  # 0.0001 ETH per image
     seconds_per_item = 1
+    uploads = {"model": "file", "images": "files"}
 
     def add_cli_args(self, parser):
         parser.add_argument("--model", default=str(DEFAULT_MODEL), help="ONNX classifier")

@@ -452,12 +452,35 @@ client: ResultsSubmitted(answers, found) → task.present(item, answer)
 |---|---|---|
 | One process | `scripts/demo.py`, `tests/test_e2e.py` | `start_local_chain()` starts anvil and `Chain.deploy()` deploys the registry, both markets and every installed task. There is one `Chain`, one `Store`, one `Client` and six `ProviderAgent`s, all stepped by `drive()`. Time travel goes through `Chain.increase_time`, and `Chain.gas_spent` lets balances be checked net of gas. |
 | Several processes | `python -m degpu.chain`, `python -m degpu.agent`, `python -m degpu.client` | Each process builds its own `Chain` from the registry address, which is the same on every fresh anvil, and finds the markets from it. They share the RPC URL, the `DEGPU_STORE` directory and `.degpu-state/`. |
+| A network (the product) | `degpu host`, `degpu app`, the `degpu` CLI; `tests/test_app.py` | See below. Every user signs with their own wallet, files go through the host, and time runs for real. |
 
-- **No private keys.** Transactions are sent from anvil's unlocked accounts, so no code handles keys. This is the main thing to change for a public testnet.
+- **Demo keys.** The first two ways send from anvil's unlocked accounts, so no code handles keys.
 - **Two deploy paths.**
   - `Chain.deploy` (Python) registers every installed task.
   - `contracts/script/Deploy.s.sol` (a forge script, checked by `Deploy.t.sol`) registers only the built-in ones.
 
+### 8.1 The network setup
+
+```
+ CLI / GUI ──HTTP──▶ app (api.py) ──▶ Node (node.py) ──┬─ Client ──────┐  two threads, the same
+  (each laptop)      127.0.0.1:8700    wallet (wallet.py)└─ ProviderAgent┘  step() calls as the demo
+                                           │ Chain.add_signer: signs locally, sends raw
+                                           ▼
+                     host (host.py) on one laptop, port 8600:
+                     /rpc gateway ─▶ anvil (127.0.0.1, secret mnemonic, state on disk)
+                     /blobs (Store) · /faucet · /artifacts (ABIs) · /network.json
+```
+
+| Module | What it owns |
+|---|---|
+| `wallet.py` | Encrypted keystore files in `~/.degpu/wallets/`. The provider's X25519 key is derived from the wallet key (`crypto.keypair_from_wallet`). |
+| `host.py` | anvil with a saved state, which deploys on its first run. The gateway lets through reads and `eth_sendRawTransaction` only, so there is no time travel, no `anvil_setBalance` and no sending from the host's accounts. It also owns the store, the faucet (once per address) and the ABIs, so users need no Foundry. |
+| `storage.HttpStore` | The same `put`/`get` as `Store`, over HTTP. Downloads are hash-checked. An unreachable host raises `StoreUnavailable`, which the drivers retry instead of reporting a bad input. |
+| `node.py` | One method per manual action (wallet, market, provider, client), plus the two background loops. Their locks are separate, so a long render never delays a reveal. Its state lives under `~/.degpu/networks/<registry>/`. |
+| `api.py` | The HTTP API over the `Node` ([API.md](API.md)). It answers only on 127.0.0.1, and every POST needs the `X-DeGPU` header. Uploads become the same argparse namespace the CLI builds, so `task.prepare` is reused as is. |
+| `cli.py` | The `degpu` command. `host` and `app` run things; `wallet` works on local files; everything else calls the app's API. |
+
+The only change a task needs is its `uploads` hint, which says which flags name files.
 ## 9. Tests by layer
 
 | Layer | Tests | Approach |
@@ -465,6 +488,7 @@ client: ResultsSubmitted(answers, found) → task.present(item, answer)
 | Contracts | `contracts/test/*.t.sol` | `DeGPUBase` deploys the replicated market with the demo params and six providers; tests feed synthetic leaves and steer draws with `vm.prevrandao`. The suites are: Settlement, Reverts, Draw (including offer filtering), Encoding, Gas, Deploy, `TaskTypes` (per-task prices and deadlines, two markets on one registry), `Similarity` (disputes, judgements, the bond, every similar outcome) and `CheckedMarket` (its own fixture with `KeySearchChecker`). |
 | Python libraries | `test_crypto.py`, `test_storage.py`, `test_runner.py`, `test_decode.py`, `test_key_search.py`, `test_similarity.py` | Golden vectors shared with the Solidity tests, runner determinism, leaf decoding, the replicated manifest helpers, and the render similarity rule on synthetic images. |
 | Every task | `tests/test_tasks.py` | Conformance tests run once per installed task, so a new task is tested automatically. Exact tasks: determinism and batch independence, word format and decoding. Similar tasks: a sane `similar`. Both: runner-hash coverage. Checked tasks: solve/check consistency and agreement with the deployed checker. |
+| Product path | `tests/test_wallet.py`, `tests/test_host.py`, `tests/test_app.py` | Keystores. The gateway blocks time travel and free ETH. The faucet pays once. Hash-checked blobs. The host keeps its chain across restarts. Then a host plus five users driven only through the API: a key search, a verified image job, and a cheater caught and slashed. |
 | Integration | `tests/test_e2e.py` | A real anvil, all comparisons. Exact: image jobs on 20 images. Similar: the test-only fake render task (`tests/fake_render/`, injected by `conftest.py`) runs an honest job, a cheat, lying verifiers, missing files and an unfounded dispute; a real Blender job runs too if Blender is installed. Checked: key-search jobs. |
 | Acceptance | `scripts/demo.py` | Nine scenarios with exact balance assertions (the two render scenarios skip without Blender); it exits with code 1 on any failure. |
 

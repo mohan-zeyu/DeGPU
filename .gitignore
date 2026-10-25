@@ -7,5 +7,6 @@ contracts/cache/
 contracts/broadcast/
 .degpu-store/
 .degpu-state/
-assets/
+/assets/
 results/
+frontend/node_modules/
