@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 590" width="1000" height="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .t { font-size: 22px; font-weight: 760; fill: #0f172a; letter-spacing: -0.01em; }
+    .s { font-size: 14.5px; fill: #64748b; }
+    .ph { font-size: 13px; font-weight: 720; fill: #0f172a; }
+    .phn { font-size: 13px; font-weight: 600; fill: #94a3b8; }
+    .ln { font-size: 13.5px; font-weight: 720; fill: #0f172a; }
+    .lsub { font-size: 11.5px; fill: #64748b; }
+    .bx { font-size: 12px; fill: #0f172a; }
+    .cap { font-size: 13px; fill: #334155; }
+    .capb { font-weight: 700; fill: #0f172a; }
+    .band { font-size: 11px; font-weight: 750; letter-spacing: 0.12em; fill: #b45309; }
+  </style>
+  <rect width="1000" height="590" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="589" rx="18" fill="none" stroke="#e5e7eb"/>
+  <text class="t" x="32" y="46">Life of a replicated job</text>
+  <text class="s" x="32" y="71">Each row is one party, each column one step. The contract row shows what the chain records.</text>
+  <rect x="364" y="92" width="198" height="382" rx="12" fill="#fffbeb" stroke="#fde7b0"/>
+  <rect x="768" y="92" width="97" height="382" rx="12" fill="#fdf2f8" stroke="#f9d3e6" stroke-dasharray="4 4"/>
+  <text x="210.5" y="114" text-anchor="middle"><tspan class="phn">1</tspan><tspan class="ph" dx="5">Post</tspan></text>
+  <text x="311.5" y="114" text-anchor="middle"><tspan class="phn">2</tspan><tspan class="ph" dx="5">Accept</tspan></text>
+  <text x="412.5" y="114" text-anchor="middle"><tspan class="phn">3</tspan><tspan class="ph" dx="5">Commit</tspan></text>
+  <text x="513.5" y="114" text-anchor="middle"><tspan class="phn">4</tspan><tspan class="ph" dx="5">Reveal</tspan></text>
+  <text x="614.5" y="114" text-anchor="middle"><tspan class="phn">5</tspan><tspan class="ph" dx="5">Check</tspan></text>
+  <text x="715.5" y="114" text-anchor="middle"><tspan class="phn">6</tspan><tspan class="ph" dx="5">Publish</tspan></text>
+  <text x="816.5" y="114" text-anchor="middle"><tspan class="phn">7</tspan><tspan class="ph" dx="5">Tie-break</tspan></text>
+  <text x="917.5" y="114" text-anchor="middle"><tspan class="phn">8</tspan><tspan class="ph" dx="5">Settle</tspan></text>
+  <circle cx="40" cy="156.0" r="4.5" fill="#0d9488"/>
+  <text class="ln" x="52" y="160.5">Client</text>
+  <text class="lsub" x="52" y="177.0">small team</text>
+  <line x1="32" y1="196" x2="968" y2="196" stroke="#eef1f5"/>
+  <circle cx="40" cy="224.0" r="4.5" fill="#7c3aed"/>
+  <text class="ln" x="52" y="228.5">Contract</text>
+  <text class="lsub" x="52" y="245.0">on-chain</text>
+  <line x1="32" y1="264" x2="968" y2="264" stroke="#eef1f5"/>
+  <circle cx="40" cy="292.0" r="4.5" fill="#2563eb"/>
+  <text class="ln" x="52" y="296.5">Main provider</text>
+  <text class="lsub" x="52" y="313.0">does the job</text>
+  <line x1="32" y1="332" x2="968" y2="332" stroke="#eef1f5"/>
+  <circle cx="40" cy="360.0" r="4.5" fill="#d97706"/>
+  <text class="ln" x="52" y="364.5">Verifiers</text>
+  <text class="lsub" x="52" y="381.0">2, drawn at random</text>
+  <line x1="32" y1="400" x2="968" y2="400" stroke="#eef1f5"/>
+  <circle cx="40" cy="428.0" r="4.5" fill="#db2777"/>
+  <text class="ln" x="52" y="432.5">Tie-breaker</text>
+  <text class="lsub" x="52" y="449.0">random, if needed</text>
+  <rect x="165" y="136" width="91" height="52" rx="9" fill="#ffffff" stroke="#99d6cf" stroke-width="1.5"/>
+  <text class="bx" x="210.5" y="159.0" text-anchor="middle">lock 2× price,</text>
+  <text class="bx" x="210.5" y="175.0" text-anchor="middle">hide yes/no</text>
+  <rect x="165" y="204" width="91" height="52" rx="9" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <text class="bx" x="210.5" y="234.0" text-anchor="middle">Open</text>
+  <rect x="266" y="272" width="91" height="52" rx="9" fill="#ffffff" stroke="#a9c3f7" stroke-width="1.5"/>
+  <text class="bx" x="311.5" y="295.0" text-anchor="middle">check inputs,</text>
+  <text class="bx" x="311.5" y="311.0" text-anchor="middle">accept</text>
+  <rect x="266" y="204" width="91" height="52" rx="9" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <text class="bx" x="311.5" y="234.0" text-anchor="middle">Committing</text>
+  <rect x="367" y="272" width="91" height="52" rx="9" fill="#ffffff" stroke="#a9c3f7" stroke-width="1.5"/>
+  <text class="bx" x="412.5" y="295.0" text-anchor="middle">commit hash</text>
+  <text class="bx" x="412.5" y="311.0" text-anchor="middle">of all results</text>
+  <rect x="367" y="204" width="91" height="52" rx="9" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <text class="bx" x="412.5" y="234.0" text-anchor="middle">Deciding</text>
+  <rect x="468" y="136" width="91" height="52" rx="9" fill="#ffffff" stroke="#99d6cf" stroke-width="1.5"/>
+  <text class="bx" x="513.5" y="159.0" text-anchor="middle">reveal</text>
+  <text class="bx" x="513.5" y="175.0" text-anchor="middle">yes or no</text>
+  <rect x="468" y="204" width="91" height="52" rx="9" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <text class="bx" x="513.5" y="227.0" text-anchor="middle">“yes”: draw</text>
+  <text class="bx" x="513.5" y="243.0" text-anchor="middle">2 verifiers</text>
+  <rect x="569" y="136" width="91" height="52" rx="9" fill="#ffffff" stroke="#99d6cf" stroke-width="1.5"/>
+  <text class="bx" x="614.5" y="159.0" text-anchor="middle">send each</text>
+  <text class="bx" x="614.5" y="175.0" text-anchor="middle">its half’s keys</text>
+  <rect x="569" y="204" width="91" height="52" rx="9" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <text class="bx" x="614.5" y="234.0" text-anchor="middle">Checking</text>
+  <rect x="569" y="340" width="91" height="52" rx="9" fill="#ffffff" stroke="#f3c98b" stroke-width="1.5"/>
+  <text class="bx" x="614.5" y="363.0" text-anchor="middle">each re-runs</text>
+  <text class="bx" x="614.5" y="379.0" text-anchor="middle">half the items</text>
+  <rect x="670" y="272" width="91" height="52" rx="9" fill="#ffffff" stroke="#a9c3f7" stroke-width="1.5"/>
+  <text class="bx" x="715.5" y="295.0" text-anchor="middle">publish</text>
+  <text class="bx" x="715.5" y="311.0" text-anchor="middle">all results</text>
+  <rect x="670" y="204" width="91" height="52" rx="9" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <text class="bx" x="715.5" y="227.0" text-anchor="middle">compare</text>
+  <text class="bx" x="715.5" y="243.0" text-anchor="middle">every item</text>
+  <rect x="771" y="136" width="91" height="52" rx="9" fill="#ffffff" stroke="#99d6cf" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="bx" x="816.5" y="159.0" text-anchor="middle">send keys of</text>
+  <text class="bx" x="816.5" y="175.0" text-anchor="middle">mismatches</text>
+  <rect x="771" y="408" width="91" height="52" rx="9" fill="#ffffff" stroke="#f4a8cb" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="bx" x="816.5" y="431.0" text-anchor="middle">re-run only</text>
+  <text class="bx" x="816.5" y="447.0" text-anchor="middle">mismatches</text>
+  <rect x="771" y="204" width="91" height="52" rx="9" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="bx" x="816.5" y="227.0" text-anchor="middle">majority</text>
+  <text class="bx" x="816.5" y="243.0" text-anchor="middle">decides</text>
+  <rect x="872" y="136" width="91" height="52" rx="9" fill="#ffffff" stroke="#99d6cf" stroke-width="1.5"/>
+  <text class="bx" x="917.5" y="159.0" text-anchor="middle">gets the rest</text>
+  <text class="bx" x="917.5" y="175.0" text-anchor="middle">+ all slashes</text>
+  <rect x="872" y="204" width="91" height="52" rx="9" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <text class="bx" x="917.5" y="227.0" text-anchor="middle">pay · slash ·</text>
+  <text class="bx" x="917.5" y="243.0" text-anchor="middle">refund</text>
+  <rect x="872" y="272" width="91" height="52" rx="9" fill="#ffffff" stroke="#a9c3f7" stroke-width="1.5"/>
+  <text class="bx" x="917.5" y="295.0" text-anchor="middle">paid, or</text>
+  <text class="bx" x="917.5" y="311.0" text-anchor="middle">slashed</text>
+  <rect x="872" y="340" width="91" height="52" rx="9" fill="#ffffff" stroke="#f3c98b" stroke-width="1.5"/>
+  <text class="bx" x="917.5" y="363.0" text-anchor="middle">paid, or</text>
+  <text class="bx" x="917.5" y="379.0" text-anchor="middle">slashed</text>
+  <rect x="872" y="408" width="91" height="52" rx="9" fill="#ffffff" stroke="#f4a8cb" stroke-width="1.5"/>
+  <text class="bx" x="917.5" y="431.0" text-anchor="middle">paid a fee,</text>
+  <text class="bx" x="917.5" y="447.0" text-anchor="middle">or slashed</text>
+  <rect x="32" y="491" width="12" height="12" rx="3" fill="#fffbeb" stroke="#f5c76b"/>
+  <text class="cap" x="52" y="502"><tspan class="capb">Commit, then reveal.</tspan> The main provider locks in its results before it learns whether the job is checked, so it must run every job honestly.</text>
+  <rect x="32" y="515" width="12" height="12" rx="3" fill="#fdf2f8" stroke="#f0a6c9" stroke-dasharray="3 2"/>
+  <text class="cap" x="52" y="526"><tspan class="capb">Only on a mismatch.</tspan> Step 7 runs only when the main provider and a verifier disagree on some items.</text>
+  <path d="M33 545 H43 M39 541 L43 545 L39 549" stroke="#64748b" stroke-width="1.5" fill="none"/>
+  <text class="cap" x="52" y="550"><tspan class="capb">Secret answer “no”.</tspan> Steps 5 and 7 are skipped: the main provider is paid, and the client gets the unused half of its deposit back.</text>
+</svg>

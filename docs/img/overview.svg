@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 510" width="1000" height="510" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ah-client" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#0d9488"/></marker>
+    <marker id="ah-chain" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#7c3aed"/></marker>
+    <marker id="ah-main" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#2563eb"/></marker>
+  </defs>
+  <style>
+    .t { font-size: 22px; font-weight: 760; fill: #0f172a; letter-spacing: -0.01em; }
+    .s { font-size: 14.5px; fill: #64748b; }
+    .tag { font-size: 11.5px; font-weight: 750; letter-spacing: 0.14em; }
+    .h { font-size: 18px; font-weight: 720; fill: #0f172a; }
+    .h2 { font-size: 15px; font-weight: 700; fill: #0f172a; }
+    .b { font-size: 13px; fill: #334155; }
+    .m { font-size: 12.5px; fill: #64748b; }
+    .bold { font-size: 13.5px; font-weight: 700; fill: #0f172a; }
+    .lab { font-size: 12.5px; fill: #334155; font-weight: 560; }
+    .foot { font-size: 13px; fill: #64748b; }
+  </style>
+
+  <rect width="1000" height="510" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="509" rx="18" fill="none" stroke="#e5e7eb"/>
+
+  <text class="t" x="32" y="46">DeGPU at a glance</text>
+  <text class="s" x="32" y="71">Money, stakes and checks live on-chain. The computing and the data stay off-chain.</text>
+
+  <!-- client -->
+  <rect x="32" y="110" width="190" height="200" rx="16" fill="#ffffff" stroke="#99d6cf" stroke-width="1.5"/>
+  <circle cx="54" cy="138" r="4.5" fill="#0d9488"/>
+  <text class="tag" x="66" y="142" fill="#0d9488">CLIENT</text>
+  <text class="h" x="50" y="172">Small team</text>
+  <text class="b" x="50" y="198">Rents compute for</text>
+  <text class="b" x="50" y="216">its jobs. Wants low</text>
+  <text class="b" x="50" y="234">prices and privacy.</text>
+  <rect x="50" y="256" width="154" height="34" rx="9" fill="#f0fdfa"/>
+  <text class="m" x="127" y="277" text-anchor="middle" fill="#0f766e">GUI or CLI</text>
+
+  <!-- chain -->
+  <rect x="360" y="110" width="280" height="200" rx="16" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <circle cx="382" cy="138" r="4.5" fill="#7c3aed"/>
+  <text class="tag" x="394" y="142" fill="#7c3aed">ON-CHAIN · ETHEREUM</text>
+  <text class="h" x="378" y="172">Smart contracts</text>
+  <rect x="376" y="186" width="248" height="50" rx="10" fill="#ffffff" stroke="#e9e3fe"/>
+  <text class="bold" x="392" y="206">ProviderRegistry</text>
+  <text class="m" x="392" y="225">stakes · prices · reputation</text>
+  <rect x="376" y="244" width="248" height="50" rx="10" fill="#ffffff" stroke="#e9e3fe"/>
+  <text class="bold" x="392" y="264">Market contracts</text>
+  <text class="m" x="392" y="283">escrow · checks · pay · slash</text>
+
+  <!-- providers -->
+  <rect x="778" y="110" width="190" height="200" rx="16" fill="#ffffff" stroke="#a9c3f7" stroke-width="1.5"/>
+  <circle cx="800" cy="138" r="4.5" fill="#2563eb"/>
+  <text class="tag" x="812" y="142" fill="#2563eb">PROVIDERS</text>
+  <text class="h" x="796" y="172">Staked sellers</text>
+  <text class="b" x="796" y="198">Lock 1 ETH stake and</text>
+  <text class="b" x="796" y="216">run jobs off-chain.</text>
+  <circle cx="801" cy="244" r="4" fill="#2563eb"/>
+  <text class="b" x="812" y="248">Main provider</text>
+  <circle cx="801" cy="266" r="4" fill="#d97706"/>
+  <text class="b" x="812" y="270">2 verifiers <tspan fill="#64748b">(random)</tspan></text>
+  <circle cx="801" cy="288" r="4" fill="#db2777"/>
+  <text class="b" x="812" y="292">Tie-breaker <tspan fill="#64748b">(random)</tspan></text>
+
+  <!-- client <-> chain -->
+  <path d="M226 180 H354" stroke="#0d9488" stroke-width="1.75" fill="none" marker-end="url(#ah-client)"/>
+  <text class="lab" x="291" y="170" text-anchor="middle">job + deposit</text>
+  <path d="M356 242 H228" stroke="#7c3aed" stroke-width="1.75" fill="none" marker-end="url(#ah-chain)"/>
+  <text class="lab" x="291" y="262" text-anchor="middle">refund + slashes</text>
+
+  <!-- chain <-> providers -->
+  <path d="M644 180 H772" stroke="#7c3aed" stroke-width="1.75" fill="none" marker-end="url(#ah-chain)"/>
+  <text class="lab" x="709" y="170" text-anchor="middle">jobs + payouts</text>
+  <path d="M774 242 H646" stroke="#2563eb" stroke-width="1.75" fill="none" marker-end="url(#ah-main)"/>
+  <text class="lab" x="709" y="262" text-anchor="middle">result hashes</text>
+
+  <!-- store -->
+  <rect x="360" y="372" width="280" height="80" rx="16" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <circle cx="382" cy="394" r="4.5" fill="#94a3b8"/>
+  <text class="tag" x="394" y="398" fill="#64748b">OFF-CHAIN STORAGE</text>
+  <text class="h2" x="378" y="421">Encrypted file store</text>
+  <text class="m" x="378" y="440">job inputs and results · stands in for IPFS</text>
+
+  <path d="M127 316 V412 H354" stroke="#0d9488" stroke-width="1.75" fill="none" marker-start="url(#ah-client)" marker-end="url(#ah-client)"/>
+  <text class="lab" x="250" y="402" text-anchor="middle">encrypted data</text>
+  <path d="M873 316 V412 H646" stroke="#2563eb" stroke-width="1.75" fill="none" marker-start="url(#ah-main)" marker-end="url(#ah-main)"/>
+  <text class="lab" x="750" y="402" text-anchor="middle">encrypted data</text>
+
+  <text class="foot" x="500" y="487" text-anchor="middle">Client and providers never talk directly: the contracts are the rulebook and the mailbox, the store carries the data.</text>
+</svg>

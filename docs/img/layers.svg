@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 486" width="1000" height="486" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#94a3b8"/></marker>
+  </defs>
+  <style>
+    .t { font-size: 22px; font-weight: 760; fill: #0f172a; letter-spacing: -0.01em; }
+    .s { font-size: 14.5px; fill: #64748b; }
+    .band { font-size: 11.5px; font-weight: 750; letter-spacing: 0.14em; fill: #94a3b8; }
+    .h { font-size: 15.5px; font-weight: 720; fill: #0f172a; }
+    .h2 { font-size: 17px; font-weight: 740; fill: #0f172a; }
+    .mono { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; fill: #64748b; }
+    .b { font-size: 13px; fill: #334155; }
+    .chip { font-size: 12.5px; fill: #334155; }
+    .chipb { font-size: 12.5px; font-weight: 700; fill: #0f172a; }
+    .tag { font-size: 11.5px; font-weight: 750; letter-spacing: 0.14em; fill: #7c3aed; }
+    .note { font-size: 12px; fill: #64748b; font-style: italic; }
+  </style>
+
+  <rect width="1000" height="486" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="485" rx="18" fill="none" stroke="#e5e7eb"/>
+
+  <text class="t" x="32" y="46">Two plug-in layers</text>
+  <text class="s" x="32" y="71">A job type says what to compute. A verification mode says how we know the answer is right.</text>
+
+  <!-- top layer: job types -->
+  <text class="band" x="32" y="110">JOB TYPES · WHAT TO COMPUTE · degpu/tasks/</text>
+
+  <rect x="32" y="122" width="220" height="92" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text class="h" x="50" y="149">Image classification</text>
+  <text class="mono" x="50" y="169">image-classify-v1</text>
+  <text class="b" x="50" y="195">ONNX model labels photos</text>
+
+  <rect x="272" y="122" width="220" height="92" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text class="h" x="290" y="149">3D rendering</text>
+  <text class="mono" x="290" y="169">blender-render-v1</text>
+  <text class="b" x="290" y="195">Blender renders frames</text>
+
+  <rect x="512" y="122" width="220" height="92" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text class="h" x="530" y="149">Your job type</text>
+  <text class="mono" x="530" y="169">one new folder</text>
+  <text class="b" x="530" y="195">implements a few hooks</text>
+
+  <rect x="752" y="122" width="216" height="92" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text class="h" x="770" y="149">Key search</text>
+  <text class="mono" x="770" y="169">key-search-v1</text>
+  <text class="b" x="770" y="195">find a key from its hash</text>
+
+  <!-- connectors -->
+  <path d="M142 218 V285" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-end="url(#ah)"/>
+  <path d="M382 218 V285" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-end="url(#ah)"/>
+  <path d="M860 218 V285" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-end="url(#ah)"/>
+  <path d="M596 218 L470 284" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ah)"/>
+  <path d="M648 218 L720 284" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ah)"/>
+  <text class="note" x="622" y="268" text-anchor="middle">picks one</text>
+
+  <!-- bottom layer: verification modes -->
+
+  <rect x="32" y="290" width="460" height="164" rx="16" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <circle cx="54" cy="314" r="4.5" fill="#7c3aed"/>
+  <text class="tag" x="66" y="318">VERIFICATION MODE</text>
+  <text class="h2" x="50" y="344">Replicated</text>
+  <text class="mono" x="146" y="344">ReplicatedMarket</text>
+  <text class="b" x="50" y="366">Random providers re-run the work. The task picks the compare rule.</text>
+  <rect x="50" y="378" width="200" height="60" rx="10" fill="#ffffff" stroke="#e9e3fe"/>
+  <text class="chipb" x="64" y="398">exact</text>
+  <text class="chip" x="64" y="417">the contract compares</text>
+  <text class="chip" x="64" y="432">result hashes</text>
+  <rect x="274" y="378" width="200" height="60" rx="10" fill="#ffffff" stroke="#e9e3fe"/>
+  <text class="chipb" x="288" y="398">similar</text>
+  <text class="chip" x="288" y="417">the client compares frames,</text>
+  <text class="chip" x="288" y="432">disputes the ones that differ</text>
+
+  <rect x="512" y="290" width="456" height="164" rx="16" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <circle cx="534" cy="314" r="4.5" fill="#7c3aed"/>
+  <text class="tag" x="546" y="318">VERIFICATION MODE</text>
+  <text class="h2" x="530" y="344">Checked</text>
+  <text class="mono" x="608" y="344">CheckedMarket</text>
+  <text class="b" x="530" y="366">A checker contract tests every answer on-chain.</text>
+  <text class="b" x="530" y="404">A wrong answer reverts,</text>
+  <text class="b" x="530" y="422">so it is never paid.</text>
+  <rect x="740" y="378" width="210" height="60" rx="10" fill="#ffffff" stroke="#e9e3fe"/>
+  <text class="chipb" x="754" y="398">IChecker</text>
+  <text class="chip" x="754" y="417">KeySearchChecker: is</text>
+  <text class="chip" x="754" y="432">keccak(key) the target?</text>
+</svg>

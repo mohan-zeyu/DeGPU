@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 520" width="1000" height="520" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#94a3b8"/></marker>
+  </defs>
+  <style>
+    .t { font-size: 22px; font-weight: 760; fill: #0f172a; letter-spacing: -0.01em; }
+    .s { font-size: 14.5px; fill: #64748b; }
+    .tag { font-size: 11.5px; font-weight: 750; letter-spacing: 0.14em; fill: #94a3b8; }
+    .h { font-size: 17px; font-weight: 730; fill: #0f172a; }
+    .hb { font-size: 13.5px; font-weight: 700; fill: #0f172a; }
+    .mono { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; fill: #64748b; }
+    .monob { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; font-weight: 700; fill: #0f172a; }
+    .b { font-size: 12.5px; fill: #334155; }
+    .m { font-size: 12px; fill: #64748b; }
+    .lab { font-size: 12px; fill: #64748b; font-style: italic; }
+    .foot { font-size: 13px; fill: #64748b; }
+  </style>
+  <rect width="1000" height="520" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="519" rx="18" fill="none" stroke="#e5e7eb"/>
+  <text class="t" x="32" y="46">Running on a real network</text>
+  <text class="s" x="32" y="71">One laptop hosts the shared chain and files. Every user runs their own app, with their own wallet.</text>
+  <rect x="32" y="100" width="328" height="356" rx="14" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text class="tag" x="50" y="126">HOST LAPTOP</text>
+  <text class="h" x="50" y="152">Network host</text>
+  <text class="mono" x="50" y="172">uv run degpu host</text>
+  <rect x="48" y="186" width="296" height="164" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.25"/>
+  <text class="hb" x="64" y="208">HTTP server · port 8600</text>
+  <text class="monob" x="64" y="236">/rpc</text>
+  <text class="b" x="152" y="236">signed txs, no time travel</text>
+  <line x1="64" y1="246" x2="328" y2="246" stroke="#f1f5f9"/>
+  <text class="monob" x="64" y="264">/blobs</text>
+  <text class="b" x="152" y="264">encrypted file store</text>
+  <line x1="64" y1="274" x2="328" y2="274" stroke="#f1f5f9"/>
+  <text class="monob" x="64" y="292">/faucet</text>
+  <text class="b" x="152" y="292">2 test ETH once per wallet</text>
+  <line x1="64" y1="302" x2="328" y2="302" stroke="#f1f5f9"/>
+  <text class="monob" x="64" y="320">/artifacts</text>
+  <text class="b" x="152" y="320">contract ABIs</text>
+  <rect x="48" y="378" width="296" height="62" rx="14" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.25"/>
+  <text class="hb" x="64" y="401">anvil chain + contracts</text>
+  <text class="m" x="64" y="420">127.0.0.1 only · state saved to disk</text>
+  <path d="M196 352 V374" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+  <text class="hb" x="440" y="132" text-anchor="middle">Wi-Fi</text>
+  <text class="m" x="440" y="148" text-anchor="middle">same network</text>
+  <line x1="440" y1="160" x2="440" y2="420" stroke="#94a3b8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M364 236 H440" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-start="url(#ah)"/>
+  <path d="M440 304 H516" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-end="url(#ah)"/>
+  <path d="M440 420 H516" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-end="url(#ah)"/>
+  <rect x="520" y="100" width="448" height="272" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text class="tag" x="538" y="126">EACH USER’S LAPTOP</text>
+  <text class="h" x="538" y="152">Own wallet, own app</text>
+  <rect x="536" y="166" width="204" height="52" rx="14" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.25"/>
+  <text class="hb" x="552" y="188">Browser GUI</text>
+  <text class="m" x="552" y="206">React · Vite · TypeScript</text>
+  <rect x="752" y="166" width="200" height="52" rx="14" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.25"/>
+  <text class="hb" x="768" y="188">Command line</text>
+  <text class="mono" x="768" y="206">uv run degpu …</text>
+  <path d="M638 220 V244" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+  <path d="M852 220 V244" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+  <text class="lab" x="745" y="237" text-anchor="middle">HTTP API</text>
+  <rect x="536" y="248" width="416" height="108" rx="14" fill="#f0fdfa" stroke="#99d6cf" stroke-width="1.25"/>
+  <text class="hb" x="552" y="271">DeGPU app</text>
+  <text class="mono" x="638" y="271">127.0.0.1:8700</text>
+  <circle cx="556" cy="290" r="2.5" fill="#0d9488"/>
+  <text class="b" x="566" y="294">Wallet: encrypted keystore, signs locally</text>
+  <circle cx="556" cy="310" r="2.5" fill="#0d9488"/>
+  <text class="b" x="566" y="314">Runs the automatic steps: accept, compute, commit, reveal</text>
+  <circle cx="556" cy="330" r="2.5" fill="#0d9488"/>
+  <text class="b" x="566" y="334">Keeps each job’s secrets on this laptop</text>
+  <text class="tag" x="520" y="400">MORE USERS, SAME APP</text>
+  <rect x="520" y="408" width="140" height="30" rx="14" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.25"/>
+  <text x="590" y="428" text-anchor="middle"><tspan class="monob">alice</tspan><tspan class="m" dx="6">client</tspan></text>
+  <rect x="672" y="408" width="140" height="30" rx="14" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.25"/>
+  <text x="742" y="428" text-anchor="middle"><tspan class="monob">bob</tspan><tspan class="m" dx="6">provider</tspan></text>
+  <rect x="824" y="408" width="140" height="30" rx="14" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.25"/>
+  <text x="894" y="428" text-anchor="middle"><tspan class="monob">carol</tspan><tspan class="m" dx="6">provider</tspan></text>
+  <text class="foot" x="500.0" y="490" text-anchor="middle">Only signed transactions and encrypted files cross the network. The host can’t read or change files, but it runs the chain.</text>
+</svg>
