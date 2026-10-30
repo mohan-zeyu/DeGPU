@@ -17,6 +17,14 @@ The computing itself runs off-chain, on the providers' machines. Only money, sta
 
 ![DeGPU at a glance: a client, the smart contracts, the providers and an encrypted file store](img/overview.svg)
 
+*Figure 1. DeGPU at a glance.* The purple band is on-chain; everything below it is off-chain. Among the providers, blue is the main provider, amber the verifiers and pink the tie-breaker. The numbers mark the four flows:
+1. **Client ↔ contracts (coin):** the client posts a job and locks its payment. Refunds, and any stake taken from a cheater, come back the same way.
+2. **Contracts ↔ providers (bell):** the contracts tell providers they were picked. Providers send back hashes of their results and are paid or slashed.
+3. **Client ↔ storage (lock):** the client uploads its inputs, encrypted, and later downloads the results.
+4. **Storage ↔ providers (lock):** providers download only the inputs they may open, and upload their results.
+
+The client and the providers never talk to each other directly.
+
 ## 2. Main features
 
 | Feature | What it means |
@@ -34,6 +42,13 @@ The two plug-in layers are the core of the design. A **job type** says *what* to
 
 ![Two plug-in layers: job types on top, verification modes below](img/layers.svg)
 
+*Figure 2. Two plug-in layers.*
+- **Top row, the job types:** image labelling, 3D rendering and key search. The dashed tile is a new job type you add.
+- **Bottom row, the verification modes:**
+  - *Replicated:* other providers re-run the work. With **=** (exact), the contract checks that the result hashes are equal; image labels work this way. With **≈** (similar), the client checks that rendered frames are close enough.
+  - *Checked:* a small checker contract tests each answer on-chain (the ✓ cube), as for key search.
+- **The dashed arrows:** a new job type picks whichever mode fits it.
+
 ## 3. How a job works
 
 Every job has a few roles:
@@ -42,11 +57,21 @@ Every job has a few roles:
 - **Verifiers (2):** drawn at random by the contract; each re-runs half of the work.
 - **Tie-breaker:** drawn at random only when the main provider and a verifier disagree.
 
-The figure below follows one replicated job, such as labelling 200 photos. Read each column from top to bottom, and the columns from left to right.
+The figure below follows one replicated job, such as labelling 200 photos, from left to right.
 
 ![Life of a replicated job, from posting to settlement](img/job-flow.svg)
 
-The key trick is in steps 3 and 4:
+*Figure 3. Life of a replicated job.* The coloured dots under each step show who acts.
+1. **Post (lock):** the client locks 2 × the price and a hidden yes/no decision.
+2. **Accept (✓):** the main provider checks the inputs and accepts the job.
+3. **Commit (#):** the main provider runs the job and sends only a hash of its results.
+4. **Reveal (eye):** the client reveals the decision. On "yes", the contract draws 2 random verifiers.
+5. **Check (magnifier):** the client sends each verifier the keys for its half of the items, and each verifier re-runs that half.
+6. **Publish (upload):** the main provider publishes its results, and the contract compares every checked item.
+7. **Tie-break (scales, dashed):** only if some items disagree. A random tie-breaker re-runs just those items.
+8. **Settle (coin):** the contract pays, slashes and refunds.
+
+On "no", steps 5 and 7 are skipped (the dashed "no" arc). The key trick is in the amber box, steps 3 and 4:
 - When posting, the client locks **2 × the price** and a **hidden yes/no** (only its hash goes on-chain). Every job looks the same on-chain, checked or not.
 - The main provider must **commit** to its results (send a hash of them) **before** the client reveals the decision.
 - So when the provider works, it doesn't know whether this job will be checked. The only safe choice is to do every job honestly.
@@ -63,6 +88,16 @@ On a verified job, the contract compares the main provider's results with the ve
 
 ![How a mismatch is settled: the tie-breaker re-runs only the item that differs, and the majority wins](img/tiebreak.svg)
 
+*Figure 4. How a mismatch is settled.*
+- **Left:** a verified job with 10 items. The blue row holds the main provider's results and the amber row the verifiers'. Verifier 1 re-ran items 1–5 and verifier 2 re-ran items 6–10, so every item is checked once. All items match (=) except item 7 (≠).
+- **Right, the vote on item 7:** the main provider answered ▲ and the verifier ●. The tie-breaker re-runs the item and also gets ●, so ● wins 2 to 1.
+- **Bottom right:** the outvoted main provider loses 0.3 ETH of stake, which goes to the client. The tie-breaker earns a fee (0.002 ETH in the demo).
+
+For each disputed item, the majority of three decides:
+- **The tie-breaker agrees with the verifier:** the main provider is slashed.
+- **The tie-breaker agrees with the main provider:** the verifier is slashed.
+- **All three differ:** there is no majority. That item isn't paid, and nobody is slashed for it.
+
 The outvoted party is slashed, so lying as a verifier doesn't work either: in the demo, when both verifiers lie, both lose 0.3 ETH and the honest main provider is still paid. Nobody can copy someone else's answer, because everyone commits a hash first and reveals later.
 
 ### Render jobs: similar, not equal
@@ -78,6 +113,12 @@ A provider that fakes a job saves at most the job's price (0.020 ETH for 200 pho
 
 ![Expected gain from faking one job, against the share of jobs the client verifies](img/cheating-economics.svg)
 
+*Figure 5. Why cheating doesn't pay.*
+- **The blue line** is a cheater's expected gain per faked job: 0.020 − 0.3 × (the share of jobs verified).
+- **In the red area** cheating pays.
+- **In the green area** it loses money.
+- **The line crosses zero** when 1 job in 15 (6.7%) is verified.
+
 | Cheat | What stops it |
 |---|---|
 | Lazy main provider makes results up | Commit before the hidden decision is revealed; on a verified job every item is re-run; slashed 30% |
@@ -90,19 +131,22 @@ A provider that fakes a job saves at most the job's price (0.020 ETH for 200 pho
 
 ### On-chain and off-chain
 
-The system has five layers:
-- **Smart contracts** (Solidity) hold the money, the stakes and every judgement.
-  - `ProviderRegistry` stores stakes, encryption keys, prices and reputation.
-  - `MarketBase` holds what both markets share. `ReplicatedMarket` and `CheckedMarket` each implement one verification mode.
-  - A checked job type adds a small checker contract, such as `KeySearchChecker`.
-- **Actors** (Python): the client and the provider agent. Each one wraps one account.
-- **Mode drivers:** the off-chain half of each market. They decide what each role does in each step.
-- **Job types:** what actually runs: preparing inputs, computing, and reading results.
-- **Shared libraries:** hashing and encryption, talking to the chain, and the file store.
+The code has six layers. Figure 6 shows them from top to bottom, and the table below it says what each icon stands for.
 
-![Code architecture: contracts on top; actors, mode drivers, job types and shared libraries below](img/architecture.svg)
+![Code architecture: contracts on top; channels, actors, mode drivers, job types and libraries below](img/architecture.svg)
 
-**The design rule: actors never talk to each other directly.** Everything goes through three shared channels:
+*Figure 6. Code architecture,* from top to bottom:
+
+| Row in the figure | What it is | Code |
+|---|---|---|
+| **Contracts** (Solidity) | They hold the money, the stakes and every judgement. **Registry** stores stakes, encryption keys, prices and reputation. The two markets, **Replicated** and **Checked**, share `MarketBase`, and they lock and slash stakes in the registry (the coin). **Checker** tests answers for checked jobs. | `ProviderRegistry`, `ReplicatedMarket`, `CheckedMarket`, `KeySearchChecker` |
+| **Channels** | The only ways the actors communicate: **State** is the contract's record of each job, **Events** are the mailbox, and **Store** holds the encrypted files. | `getJob`, contract events, `storage.py` |
+| **Actors** (Python) | The **client** and the **provider**. Each one wraps one account. | `client.py`, `agent.py`, `node.py` |
+| **Modes** | The off-chain half of each market, drawn with the same icons as the markets above. They decide what each role does in each step. | `degpu/modes/` |
+| **Job types** | What actually runs: preparing inputs, computing, and reading results. | `degpu/tasks/` |
+| **Libraries** | Shared by every layer: hashing and encryption, talking to the chain, and the file store. | `crypto.py`, `chain.py`, `storage.py` |
+
+**The design rule: actors never talk to each other directly.** Everything goes through the three channels:
 1. **Contract state** is the single source of truth for where a job is. Every actor reads it to choose its next move.
 2. **Contract events** are the mailbox. They tell a provider it was picked and carry the secrets sealed for it.
 3. **The encrypted store** holds the bulk files. Only their hashes go on-chain.
@@ -119,6 +163,12 @@ For a live demo with classmates, one laptop runs `degpu host`. It serves:
 Every user runs `degpu app` with their own wallet. The app signs transactions on the user's laptop and runs the automatic steps of every job in the background. The user drives it from a browser GUI or from the command line.
 
 ![Network setup: one host laptop and each user's own app and wallet](img/network.svg)
+
+*Figure 7. Running on a real network.*
+- **Left:** the host laptop serves the chain (cube), the encrypted files (cylinder) and the faucet (drop).
+- **Middle:** everyone is on the same Wi-Fi.
+- **Right:** each user's laptop has its own wallet, the browser GUI and the command line, which both talk to the user's app.
+- **Right-most icon:** the user's role, a client (people) or a provider (chip).
 
 ### Tech stack
 

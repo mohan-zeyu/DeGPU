@@ -1,85 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 486" width="1000" height="486" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 414" width="1000" height="414" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
   <defs>
-    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#94a3b8"/></marker>
+    <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></g></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></g></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M7.5 3v18M16.5 3v18M3 7.5h4.5M3 12h4.5M3 16.5h4.5M16.5 7.5H21M16.5 12H21M16.5 16.5H21"/></g></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L20 3M16.5 6.5l3 3M14 9l2.5 2.5"/></g></symbol>
+    <symbol id="i-photo" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="9.5" r="1.8"/><path d="M21 15.5l-5-5L6 20"/></g></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></g></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l8 3v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10v-6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></g></symbol>
+    <marker id="m94a3b8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#94a3b8"/></marker>
   </defs>
-  <style>
-    .t { font-size: 22px; font-weight: 760; fill: #0f172a; letter-spacing: -0.01em; }
-    .s { font-size: 14.5px; fill: #64748b; }
-    .band { font-size: 11.5px; font-weight: 750; letter-spacing: 0.14em; fill: #94a3b8; }
-    .h { font-size: 15.5px; font-weight: 720; fill: #0f172a; }
-    .h2 { font-size: 17px; font-weight: 740; fill: #0f172a; }
-    .mono { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; fill: #64748b; }
-    .b { font-size: 13px; fill: #334155; }
-    .chip { font-size: 12.5px; fill: #334155; }
-    .chipb { font-size: 12.5px; font-weight: 700; fill: #0f172a; }
-    .tag { font-size: 11.5px; font-weight: 750; letter-spacing: 0.14em; fill: #7c3aed; }
-    .note { font-size: 12px; fill: #64748b; font-style: italic; }
-  </style>
-
-  <rect width="1000" height="486" rx="18" fill="#ffffff"/>
-  <rect x="0.5" y="0.5" width="999" height="485" rx="18" fill="none" stroke="#e5e7eb"/>
-
-  <text class="t" x="32" y="46">Two plug-in layers</text>
-  <text class="s" x="32" y="71">A job type says what to compute. A verification mode says how we know the answer is right.</text>
-
-  <!-- top layer: job types -->
-  <text class="band" x="32" y="110">JOB TYPES · WHAT TO COMPUTE · degpu/tasks/</text>
-
-  <rect x="32" y="122" width="220" height="92" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
-  <text class="h" x="50" y="149">Image classification</text>
-  <text class="mono" x="50" y="169">image-classify-v1</text>
-  <text class="b" x="50" y="195">ONNX model labels photos</text>
-
-  <rect x="272" y="122" width="220" height="92" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
-  <text class="h" x="290" y="149">3D rendering</text>
-  <text class="mono" x="290" y="169">blender-render-v1</text>
-  <text class="b" x="290" y="195">Blender renders frames</text>
-
-  <rect x="512" y="122" width="220" height="92" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4"/>
-  <text class="h" x="530" y="149">Your job type</text>
-  <text class="mono" x="530" y="169">one new folder</text>
-  <text class="b" x="530" y="195">implements a few hooks</text>
-
-  <rect x="752" y="122" width="216" height="92" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
-  <text class="h" x="770" y="149">Key search</text>
-  <text class="mono" x="770" y="169">key-search-v1</text>
-  <text class="b" x="770" y="195">find a key from its hash</text>
-
-  <!-- connectors -->
-  <path d="M142 218 V285" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-end="url(#ah)"/>
-  <path d="M382 218 V285" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-end="url(#ah)"/>
-  <path d="M860 218 V285" stroke="#94a3b8" stroke-width="1.75" fill="none" marker-end="url(#ah)"/>
-  <path d="M596 218 L470 284" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ah)"/>
-  <path d="M648 218 L720 284" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#ah)"/>
-  <text class="note" x="622" y="268" text-anchor="middle">picks one</text>
-
-  <!-- bottom layer: verification modes -->
-
-  <rect x="32" y="290" width="460" height="164" rx="16" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
-  <circle cx="54" cy="314" r="4.5" fill="#7c3aed"/>
-  <text class="tag" x="66" y="318">VERIFICATION MODE</text>
-  <text class="h2" x="50" y="344">Replicated</text>
-  <text class="mono" x="146" y="344">ReplicatedMarket</text>
-  <text class="b" x="50" y="366">Random providers re-run the work. The task picks the compare rule.</text>
-  <rect x="50" y="378" width="200" height="60" rx="10" fill="#ffffff" stroke="#e9e3fe"/>
-  <text class="chipb" x="64" y="398">exact</text>
-  <text class="chip" x="64" y="417">the contract compares</text>
-  <text class="chip" x="64" y="432">result hashes</text>
-  <rect x="274" y="378" width="200" height="60" rx="10" fill="#ffffff" stroke="#e9e3fe"/>
-  <text class="chipb" x="288" y="398">similar</text>
-  <text class="chip" x="288" y="417">the client compares frames,</text>
-  <text class="chip" x="288" y="432">disputes the ones that differ</text>
-
-  <rect x="512" y="290" width="456" height="164" rx="16" fill="#f5f3ff" stroke="#d8ccfd" stroke-width="1.5"/>
-  <circle cx="534" cy="314" r="4.5" fill="#7c3aed"/>
-  <text class="tag" x="546" y="318">VERIFICATION MODE</text>
-  <text class="h2" x="530" y="344">Checked</text>
-  <text class="mono" x="608" y="344">CheckedMarket</text>
-  <text class="b" x="530" y="366">A checker contract tests every answer on-chain.</text>
-  <text class="b" x="530" y="404">A wrong answer reverts,</text>
-  <text class="b" x="530" y="422">so it is never paid.</text>
-  <rect x="740" y="378" width="210" height="60" rx="10" fill="#ffffff" stroke="#e9e3fe"/>
-  <text class="chipb" x="754" y="398">IChecker</text>
-  <text class="chip" x="754" y="417">KeySearchChecker: is</text>
-  <text class="chip" x="754" y="432">keccak(key) the target?</text>
+  <rect width="1000" height="414" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="413" rx="18" fill="none" stroke="#e5e7eb"/>
+  <text x="28.0" y="90.0" font-size="11.5" font-weight="750" fill="#94a3b8" text-anchor="start" letter-spacing="1.6">JOB TYPES</text>
+  <text x="28.0" y="296.0" font-size="11.5" font-weight="750" fill="#94a3b8" text-anchor="start" letter-spacing="1.6">VERIFICATION</text>
+  <text x="28.0" y="312.0" font-size="11.5" font-weight="750" fill="#94a3b8" text-anchor="start" letter-spacing="1.6">MODES</text>
+  <rect x="200.0" y="24.0" width="160.0" height="120.0" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-photo" x="257.0" y="49.0" width="46" height="46" style="color:#334155" stroke-width="1.7"/>
+  <text x="280.0" y="124.0" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">Image labels</text>
+  <rect x="400.0" y="24.0" width="160.0" height="120.0" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-film" x="457.0" y="49.0" width="46" height="46" style="color:#334155" stroke-width="1.7"/>
+  <text x="480.0" y="124.0" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">3D render</text>
+  <rect x="600.0" y="24.0" width="160.0" height="120.0" rx="16" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <use href="#i-plus" x="657.0" y="49.0" width="46" height="46" style="color:#94a3b8" stroke-width="1.7"/>
+  <text x="680.0" y="124.0" font-size="14" font-weight="700" fill="#64748b" text-anchor="middle">Your job</text>
+  <rect x="800.0" y="24.0" width="160.0" height="120.0" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-key" x="857.0" y="49.0" width="46" height="46" style="color:#334155" stroke-width="1.7"/>
+  <text x="880.0" y="124.0" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">Key search</text>
+  <rect x="200.0" y="232.0" width="360.0" height="144.0" rx="18" fill="#f8f5ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <rect x="314.0" y="361.0" width="132.0" height="30.0" rx="15" fill="#ffffff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <use href="#i-copy" x="327.0" y="367.0" width="18" height="18" style="color:#7c3aed" stroke-width="2"/>
+  <text x="392.0" y="381.0" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">Replicated</text>
+  <rect x="800.0" y="232.0" width="160.0" height="144.0" rx="18" fill="#f8f5ff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <rect x="820.0" y="361.0" width="120.0" height="30.0" rx="15" fill="#ffffff" stroke="#d8ccfd" stroke-width="1.5"/>
+  <use href="#i-shield" x="833.0" y="367.0" width="18" height="18" style="color:#7c3aed" stroke-width="2"/>
+  <text x="892.0" y="381.0" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">Checked</text>
+  <circle cx="280.0" cy="290.0" r="28" fill="#ffffff" stroke="#cdbcfb" stroke-width="2"/>
+  <text x="280.0" y="300.0" font-size="30" font-weight="700" fill="#7c3aed" text-anchor="middle">=</text>
+  <text x="280.0" y="340.0" font-size="13" font-weight="600" fill="#64748b" text-anchor="middle">exact</text>
+  <circle cx="480.0" cy="290.0" r="28" fill="#ffffff" stroke="#cdbcfb" stroke-width="2"/>
+  <text x="480.0" y="300.0" font-size="30" font-weight="700" fill="#7c3aed" text-anchor="middle">≈</text>
+  <text x="480.0" y="340.0" font-size="13" font-weight="600" fill="#64748b" text-anchor="middle">similar</text>
+  <circle cx="880.0" cy="290.0" r="28" fill="#ffffff" stroke="#cdbcfb" stroke-width="2"/>
+  <use href="#i-cube" x="866.0" y="276.0" width="28" height="28" style="color:#7c3aed" stroke-width="1.9"/>
+  <text x="880.0" y="340.0" font-size="13" font-weight="600" fill="#64748b" text-anchor="middle">on-chain</text>
+  <circle cx="902.0" cy="268.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="902.0" cy="268.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="902.0" y="272.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">✓</text>
+  <path d="M280 150 V254" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" marker-end="url(#m94a3b8)"/>
+  <path d="M480 150 V254" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" marker-end="url(#m94a3b8)"/>
+  <path d="M880 150 V254" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" marker-end="url(#m94a3b8)"/>
+  <path d="M660 150 L552 224" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-dasharray="5 5" marker-end="url(#m94a3b8)"/>
+  <path d="M704 150 L808 224" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-dasharray="5 5" marker-end="url(#m94a3b8)"/>
 </svg>

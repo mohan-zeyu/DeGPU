@@ -4,6 +4,8 @@ DeGPU is a small decentralized compute marketplace, built as a university blockc
 
 ![DeGPU at a glance: a client, the smart contracts, the providers and an encrypted file store](docs/img/overview.svg)
 
+*The client (left) and the providers (right: main, verifiers, tie-breaker) meet only through the smart contracts, which handle money and decisions (1, 2), and the encrypted storage, which carries the data (3, 4).*
+
 - **New here?** [docs/INTRODUCTION.md](docs/INTRODUCTION.md) is a short tour with pictures.
 - **Want to run it with classmates?** Follow the [usage guide](#usage-guide-run-a-degpu-network).
 
