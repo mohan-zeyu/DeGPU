@@ -1,0 +1,18 @@
+.auth-head, .auth-panel {max-width: 520px; margin-inline: auto;}
+.auth-panel {padding: 28px;}
+.auth-fields {grid-template-columns: 1fr; gap: 20px;}
+.account-settings .panel-head > div:first-child > span {display: inline-block; margin-top: 3px; font-size: 14px;}
+.account-address {margin-top:14px; min-width:0;}
+.account-address > span {color:var(--muted);font-size:14px;}
+.account-address > p {overflow-wrap:anywhere;margin-top:6px;}
+.auth-intro {margin:0 0 20px;}
+.auth-panel .supporting-details {margin-top:18px;}
+@media (max-width: 600px) {.auth-panel {padding: 20px;}}
+@media (min-width:1001px) {
+  .auth-panel {padding:20px;}
+  .auth-fields {gap:14px;}
+  .account-settings {display:grid;grid-template-columns:minmax(0,1fr);gap:6px;}
+  .account-settings .panel-head {margin-bottom:0;}
+  .account-address {margin-top:6px;}
+  .account-settings > p {grid-column:1/-1;}
+}
