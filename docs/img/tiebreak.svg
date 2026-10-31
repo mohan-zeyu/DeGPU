@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 330" width="1000" height="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <symbol id="i-check" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></g></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 2.5v3.5M14.5 2.5v3.5M9.5 18v3.5M14.5 18v3.5M2.5 9.5H6M2.5 14.5H6M18 9.5h3.5M18 14.5h3.5"/></g></symbol>
+    <symbol id="i-team" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18 14.3c2.1.7 3.5 2.8 3.5 5.7"/></g></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></g></symbol>
+    <marker id="m94a3b8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#94a3b8"/></marker>
+    <marker id="mcbd5e1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#cbd5e1"/></marker>
+    <marker id="md97706" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#d97706"/></marker>
+    <marker id="mdc2626" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#dc2626"/></marker>
+    <marker id="meef1f5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#eef1f5"/></marker>
+  </defs>
+  <rect width="1000" height="330" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="329" rx="18" fill="none" stroke="#e5e7eb"/>
+  <text x="128.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">1</text>
+  <text x="168.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">2</text>
+  <text x="208.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">3</text>
+  <text x="248.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">4</text>
+  <text x="288.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">5</text>
+  <text x="328.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">6</text>
+  <text x="368.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">7</text>
+  <text x="408.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">8</text>
+  <text x="448.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">9</text>
+  <text x="488.0" y="64.0" font-size="12" font-weight="600" fill="#94a3b8" text-anchor="middle">10</text>
+  <circle cx="58.0" cy="92.0" r="22" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-chip" x="46.0" y="80.0" width="24" height="24" style="color:#2563eb" stroke-width="1.8"/>
+  <rect x="112.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <rect x="152.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <rect x="192.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <rect x="232.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <rect x="272.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <rect x="312.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <rect x="352.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#dc2626" stroke-width="2"/>
+  <rect x="392.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <rect x="432.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <rect x="472.0" y="76.0" width="32.0" height="32.0" rx="7" fill="#e9f0fd" stroke="#adc6f8" stroke-width="1.5"/>
+  <circle cx="58.0" cy="182.0" r="22" fill="#fdf3e4" stroke="#f2cd92" stroke-width="2"/>
+  <use href="#i-chip" x="46.0" y="170.0" width="24" height="24" style="color:#d97706" stroke-width="1.8"/>
+  <rect x="112.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <rect x="152.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <rect x="192.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <rect x="232.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <rect x="272.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <rect x="312.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <rect x="352.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#dc2626" stroke-width="2"/>
+  <rect x="392.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <rect x="432.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <rect x="472.0" y="166.0" width="32.0" height="32.0" rx="7" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <text x="128.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <text x="168.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <text x="208.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <text x="248.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <text x="288.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <text x="328.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <text x="368.0" y="146.0" font-size="18" font-weight="700" fill="#dc2626" text-anchor="middle">≠</text>
+  <text x="408.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <text x="448.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <text x="488.0" y="146.0" font-size="18" font-weight="700" fill="#16a34a" text-anchor="middle">=</text>
+  <rect x="346.0" y="70.0" width="44.0" height="134.0" rx="11" fill="none" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <path d="M112 214 V220 H304 V214" fill="none" stroke="#d97706" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="208.0" cy="236.0" r="11" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <text x="208.0" y="240.5" font-size="12" font-weight="750" fill="#d97706" text-anchor="middle">1</text>
+  <path d="M312 214 V220 H504 V214" fill="none" stroke="#d97706" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="408.0" cy="236.0" r="11" fill="#fdf3e4" stroke="#f2cd92" stroke-width="1.5"/>
+  <text x="408.0" y="240.5" font-size="12" font-weight="750" fill="#d97706" text-anchor="middle">2</text>
+  <path d="M518 136 H592" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" marker-end="url(#mdc2626)"/>
+  <rect x="600.0" y="30.0" width="370.0" height="270.0" rx="18" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <rect x="746.0" y="42.0" width="28.0" height="28.0" rx="6" fill="#ffffff" stroke="#dc2626" stroke-width="2"/>
+  <text x="760.0" y="61.0" font-size="13.5" font-weight="750" fill="#dc2626" text-anchor="middle">7</text>
+  <circle cx="648.0" cy="96.0" r="20" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-chip" x="637.0" y="85.0" width="22" height="22" style="color:#2563eb" stroke-width="1.8"/>
+  <path d="M676 96 H736" fill="none" stroke="#cbd5e1" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 4"/>
+  <path d="M760 82 L775 107 L745 107 z" fill="#fdecec" stroke="#dc2626" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="648.0" cy="156.0" r="20" fill="#fdf3e4" stroke="#f2cd92" stroke-width="2"/>
+  <use href="#i-chip" x="637.0" y="145.0" width="22" height="22" style="color:#d97706" stroke-width="1.8"/>
+  <path d="M676 156 H736" fill="none" stroke="#cbd5e1" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 4"/>
+  <circle cx="760.0" cy="156.0" r="13" fill="#e8f6ec" stroke="#16a34a" stroke-width="2"/>
+  <circle cx="648.0" cy="216.0" r="20" fill="#fce9f2" stroke="#f3b3d1" stroke-width="2"/>
+  <use href="#i-chip" x="637.0" y="205.0" width="22" height="22" style="color:#db2777" stroke-width="1.8"/>
+  <path d="M676 216 H736" fill="none" stroke="#cbd5e1" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 4"/>
+  <circle cx="760.0" cy="216.0" r="13" fill="#e8f6ec" stroke="#16a34a" stroke-width="2"/>
+  <path d="M800 146 q10 0 10 10 v14 q0 6 8 6 q-8 0 -8 6 v14 q0 10 -10 10" fill="none" stroke="#94a3b8" stroke-width="1.75"/>
+  <circle cx="870.0" cy="186.0" r="26" fill="#e8f6ec" stroke="#a7dcb6" stroke-width="2"/>
+  <use href="#i-check" x="857.0" y="173.0" width="26" height="26" style="color:#16a34a" stroke-width="2.6"/>
+  <text x="870.0" y="236.0" font-size="15" font-weight="750" fill="#16a34a" text-anchor="middle">2 : 1</text>
+  <circle cx="870.0" cy="96.0" r="20" fill="#fdecec" stroke="#f4b0b0" stroke-width="2"/>
+  <use href="#i-x" x="860.0" y="86.0" width="20" height="20" style="color:#dc2626" stroke-width="2.6"/>
+  <path d="M620 262 H950" fill="none" stroke="#eef1f5" stroke-width="1" stroke-linecap="round"/>
+  <circle cx="648.0" cy="282.0" r="13" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-chip" x="641.0" y="275.0" width="14" height="14" style="color:#2563eb" stroke-width="1.8"/>
+  <text x="670.0" y="287.5" font-size="14" font-weight="750" fill="#dc2626" text-anchor="start">−0.3 ETH</text>
+  <path d="M744 282 H770" fill="none" stroke="#94a3b8" stroke-width="1.75" stroke-linecap="round" marker-end="url(#m94a3b8)"/>
+  <circle cx="792.0" cy="282.0" r="13" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-team" x="784.5" y="274.5" width="15" height="15" style="color:#0d9488" stroke-width="1.8"/>
+  <circle cx="850.0" cy="282.0" r="13" fill="#fce9f2" stroke="#f3b3d1" stroke-width="2"/>
+  <use href="#i-chip" x="843.0" y="275.0" width="14" height="14" style="color:#db2777" stroke-width="1.8"/>
+  <text x="872.0" y="287.5" font-size="14" font-weight="750" fill="#16a34a" text-anchor="start">+fee</text>
+</svg>

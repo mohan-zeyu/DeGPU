@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 430" width="1000" height="430" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <symbol id="i-bell" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21a2 2 0 0 0 4 0"/></g></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 2.5v3.5M14.5 2.5v3.5M9.5 18v3.5M14.5 18v3.5M2.5 9.5H6M2.5 14.5H6M18 9.5h3.5M18 14.5h3.5"/></g></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 6.5l3.5 5.5-3.5 5.5-3.5-5.5z"/><path d="M8.5 12l3.5 1.8 3.5-1.8"/></g></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></g></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/></g></symbol>
+    <symbol id="i-team" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18 14.3c2.1.7 3.5 2.8 3.5 5.7"/></g></symbol>
+    <marker id="m94a3b8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#94a3b8"/></marker>
+  </defs>
+  <rect width="1000" height="430" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="429" rx="18" fill="none" stroke="#e5e7eb"/>
+  <rect x="20.0" y="20.0" width="960.0" height="150.0" rx="18" fill="#f8f5ff" stroke="#e6ddfd" stroke-width="1.5"/>
+  <text x="42.0" y="48.0" font-size="11.5" font-weight="750" fill="#7c3aed" text-anchor="start" letter-spacing="1.6">ON-CHAIN</text>
+  <text x="42.0" y="212.0" font-size="11.5" font-weight="750" fill="#94a3b8" text-anchor="start" letter-spacing="1.6">OFF-CHAIN</text>
+  <circle cx="500.0" cy="88.0" r="44" fill="#f1ecfe" stroke="#cdbcfb" stroke-width="2"/>
+  <use href="#i-cube" x="477.0" y="65.0" width="46" height="46" style="color:#7c3aed" stroke-width="1.8"/>
+  <text x="500.0" y="156.0" font-size="14.5" font-weight="700" fill="#0f172a" text-anchor="middle">Smart contracts</text>
+  <circle cx="170.0" cy="300.0" r="44" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-team" x="147.0" y="277.0" width="46" height="46" style="color:#0d9488" stroke-width="1.8"/>
+  <text x="170.0" y="368.0" font-size="14.5" font-weight="700" fill="#0f172a" text-anchor="middle">Client</text>
+  <rect x="712.0" y="248.0" width="256.0" height="104.0" rx="52" fill="#fbfcfe" stroke="#e2e8f0" stroke-width="1.5"/>
+  <circle cx="760.0" cy="300.0" r="30" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-chip" x="744.0" y="284.0" width="32" height="32" style="color:#2563eb" stroke-width="1.8"/>
+  <circle cx="840.0" cy="300.0" r="30" fill="#fdf3e4" stroke="#f2cd92" stroke-width="2"/>
+  <use href="#i-chip" x="824.0" y="284.0" width="32" height="32" style="color:#d97706" stroke-width="1.8"/>
+  <circle cx="920.0" cy="300.0" r="30" fill="#fce9f2" stroke="#f3b3d1" stroke-width="2"/>
+  <use href="#i-chip" x="904.0" y="284.0" width="32" height="32" style="color:#db2777" stroke-width="1.8"/>
+  <text x="840.0" y="380.0" font-size="14.5" font-weight="700" fill="#0f172a" text-anchor="middle">Providers</text>
+  <circle cx="500.0" cy="330.0" r="40" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-database" x="480.0" y="310.0" width="40" height="40" style="color:#64748b" stroke-width="1.8"/>
+  <circle cx="530.0" cy="358.0" r="14" fill="#ffffff" stroke="#d5dde7" stroke-width="1.5"/>
+  <use href="#i-lock" x="522.0" y="350.0" width="16" height="16" style="color:#334155" stroke-width="2.2"/>
+  <text x="500.0" y="398.0" font-size="14.5" font-weight="700" fill="#0f172a" text-anchor="middle">Encrypted storage</text>
+  <path d="M212.1 273.0 L457.9 115.0" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" marker-start="url(#m94a3b8)" marker-end="url(#m94a3b8)"/>
+  <circle cx="335.0" cy="194.0" r="18" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-coin" x="325.0" y="184.0" width="20" height="20" style="color:#0d9488" stroke-width="2"/>
+  <circle cx="354.0" cy="179.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="354.0" cy="179.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="354.0" y="183.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">1</text>
+  <path d="M543.7 112.4 L806.8 259.1" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" marker-start="url(#m94a3b8)" marker-end="url(#m94a3b8)"/>
+  <circle cx="675.2" cy="185.7" r="18" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-bell" x="665.2" y="175.7" width="20" height="20" style="color:#7c3aed" stroke-width="2"/>
+  <circle cx="694.2" cy="170.7" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="694.2" cy="170.7" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="694.2" y="175.0" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">2</text>
+  <path d="M219.8 304.5 L454.2 325.8" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" marker-start="url(#m94a3b8)" marker-end="url(#m94a3b8)"/>
+  <circle cx="337.0" cy="315.2" r="18" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-lock" x="327.0" y="305.2" width="20" height="20" style="color:#0d9488" stroke-width="2"/>
+  <circle cx="356.0" cy="300.2" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="356.0" cy="300.2" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="356.0" y="304.5" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">3</text>
+  <path d="M545.7 324.7 L724.2 304.1" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" marker-start="url(#m94a3b8)" marker-end="url(#m94a3b8)"/>
+  <circle cx="635.0" cy="314.4" r="18" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-lock" x="625.0" y="304.4" width="20" height="20" style="color:#2563eb" stroke-width="2"/>
+  <circle cx="654.0" cy="299.4" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="654.0" cy="299.4" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="654.0" y="303.7" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">4</text>
+</svg>

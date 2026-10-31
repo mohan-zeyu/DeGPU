@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 340" width="1000" height="340" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <symbol id="i-browser" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/><circle cx="6.5" cy="6.5" r=".9" fill="currentColor" stroke="none"/><circle cx="9.3" cy="6.5" r=".9" fill="currentColor" stroke="none"/></g></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 2.5v3.5M14.5 2.5v3.5M9.5 18v3.5M14.5 18v3.5M2.5 9.5H6M2.5 14.5H6M18 9.5h3.5M18 14.5h3.5"/></g></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></g></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g></symbol>
+    <symbol id="i-drop" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s6.5 7 6.5 11.5a6.5 6.5 0 0 1-13 0C5.5 10 12 3 12 3z"/></g></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="11" rx="1.5"/><path d="M2 19.5h20"/></g></symbol>
+    <symbol id="i-team" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18 14.3c2.1.7 3.5 2.8 3.5 5.7"/></g></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9.5l3 2.5-3 2.5M13 15h4"/></g></symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-1.5"/><path d="M21 9.5h-5a2.5 2.5 0 0 0 0 5h5z"/></g></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5a15 15 0 0 1 20 0M5.5 12.5a10 10 0 0 1 13 0M9 16.3a5 5 0 0 1 6 0"/><circle cx="12" cy="20" r="1.3" fill="currentColor" stroke="none"/></g></symbol>
+    <marker id="m94a3b8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#94a3b8"/></marker>
+  </defs>
+  <rect width="1000" height="340" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="339" rx="18" fill="none" stroke="#e5e7eb"/>
+  <rect x="40.0" y="48.0" width="320.0" height="262.0" rx="20" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text x="60.0" y="76.0" font-size="11.5" font-weight="750" fill="#94a3b8" text-anchor="start" letter-spacing="1.6">HOST</text>
+  <use href="#i-laptop" x="156.0" y="78.0" width="88" height="88" style="color:#334155" stroke-width="1.5"/>
+  <circle cx="120.0" cy="222.0" r="24" fill="#f1ecfe" stroke="#cdbcfb" stroke-width="2"/>
+  <use href="#i-cube" x="108.0" y="210.0" width="24" height="24" style="color:#7c3aed" stroke-width="1.8"/>
+  <text x="120.0" y="272.0" font-size="13" font-weight="650" fill="#334155" text-anchor="middle">chain</text>
+  <circle cx="200.0" cy="222.0" r="24" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-database" x="188.0" y="210.0" width="24" height="24" style="color:#64748b" stroke-width="1.8"/>
+  <text x="200.0" y="272.0" font-size="13" font-weight="650" fill="#334155" text-anchor="middle">files</text>
+  <circle cx="280.0" cy="222.0" r="24" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-drop" x="268.0" y="210.0" width="24" height="24" style="color:#0d9488" stroke-width="1.8"/>
+  <text x="280.0" y="272.0" font-size="13" font-weight="650" fill="#334155" text-anchor="middle">faucet</text>
+  <circle cx="500.0" cy="179.0" r="34" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-wifi" x="482.0" y="161.0" width="36" height="36" style="color:#334155" stroke-width="1.8"/>
+  <path d="M364 179 H460" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" marker-start="url(#m94a3b8)" marker-end="url(#m94a3b8)"/>
+  <text x="640.0" y="34.0" font-size="11.5" font-weight="750" fill="#94a3b8" text-anchor="start" letter-spacing="1.6">USERS</text>
+  <rect x="640.0" y="54.0" width="320.0" height="68.0" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-laptop" x="664.0" y="68.0" width="40" height="40" style="color:#334155" stroke-width="1.7"/>
+  <circle cx="752.0" cy="88.0" r="19" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-wallet" x="742.0" y="78.0" width="20" height="20" style="color:#0d9488" stroke-width="1.8"/>
+  <circle cx="806.0" cy="88.0" r="19" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-browser" x="796.0" y="78.0" width="20" height="20" style="color:#64748b" stroke-width="1.8"/>
+  <circle cx="860.0" cy="88.0" r="19" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-terminal" x="850.0" y="78.0" width="20" height="20" style="color:#64748b" stroke-width="1.8"/>
+  <circle cx="922.0" cy="88.0" r="21" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-team" x="911.0" y="77.0" width="22" height="22" style="color:#0d9488" stroke-width="1.8"/>
+  <path d="M533.5 157.2 L635.0 91.3" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 5" marker-end="url(#m94a3b8)"/>
+  <rect x="640.0" y="144.0" width="320.0" height="68.0" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-laptop" x="664.0" y="158.0" width="40" height="40" style="color:#334155" stroke-width="1.7"/>
+  <circle cx="752.0" cy="178.0" r="19" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-wallet" x="742.0" y="168.0" width="20" height="20" style="color:#0d9488" stroke-width="1.8"/>
+  <circle cx="806.0" cy="178.0" r="19" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-browser" x="796.0" y="168.0" width="20" height="20" style="color:#64748b" stroke-width="1.8"/>
+  <circle cx="860.0" cy="178.0" r="19" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-terminal" x="850.0" y="168.0" width="20" height="20" style="color:#64748b" stroke-width="1.8"/>
+  <circle cx="922.0" cy="178.0" r="21" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-chip" x="911.0" y="167.0" width="22" height="22" style="color:#2563eb" stroke-width="1.8"/>
+  <path d="M540.0 178.7 L634.0 178.0" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 5" marker-end="url(#m94a3b8)"/>
+  <rect x="640.0" y="234.0" width="320.0" height="68.0" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <use href="#i-laptop" x="664.0" y="248.0" width="40" height="40" style="color:#334155" stroke-width="1.7"/>
+  <circle cx="752.0" cy="268.0" r="19" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-wallet" x="742.0" y="258.0" width="20" height="20" style="color:#0d9488" stroke-width="1.8"/>
+  <circle cx="806.0" cy="268.0" r="19" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-browser" x="796.0" y="258.0" width="20" height="20" style="color:#64748b" stroke-width="1.8"/>
+  <circle cx="860.0" cy="268.0" r="19" fill="#f1f5f9" stroke="#d5dde7" stroke-width="2"/>
+  <use href="#i-terminal" x="850.0" y="258.0" width="20" height="20" style="color:#64748b" stroke-width="1.8"/>
+  <circle cx="922.0" cy="268.0" r="21" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-chip" x="911.0" y="257.0" width="22" height="22" style="color:#2563eb" stroke-width="1.8"/>
+  <path d="M533.8 200.5 L634.9 264.8" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 5" marker-end="url(#m94a3b8)"/>
+</svg>

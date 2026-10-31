@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 330" width="1000" height="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <symbol id="i-check" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></g></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 6.5l3.5 5.5-3.5 5.5-3.5-5.5z"/><path d="M8.5 12l3.5 1.8 3.5-1.8"/></g></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></g></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/></g></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/></g></symbol>
+    <symbol id="i-scale" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M7.5 21h9M4.5 6.5h15"/><path d="M6.5 6.5L3 14a3.5 3.5 0 0 0 7 0z"/><path d="M17.5 6.5L14 14a3.5 3.5 0 0 0 7 0z"/></g></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20.5 20.5L16 16"/></g></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></g></symbol>
+    <marker id="m94a3b8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#94a3b8"/></marker>
+    <marker id="mcbd5e1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1 1.5 L9 5 L1 8.5 z" fill="#cbd5e1"/></marker>
+  </defs>
+  <rect width="1000" height="330" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="329" rx="18" fill="none" stroke="#e5e7eb"/>
+  <rect x="275.0" y="96.0" width="220.0" height="126.0" rx="20" fill="#fffbeb" stroke="#fde7b0" stroke-width="1.5"/>
+  <path d="M95 150 H867" fill="none" stroke="#cbd5e1" stroke-width="3" stroke-linecap="round"/>
+  <path d="M145.0 150 h12" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" marker-end="url(#mcbd5e1)"/>
+  <path d="M261.0 150 h12" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" marker-end="url(#mcbd5e1)"/>
+  <path d="M377.0 150 h12" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" marker-end="url(#mcbd5e1)"/>
+  <path d="M493.0 150 h12" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" marker-end="url(#mcbd5e1)"/>
+  <path d="M609.0 150 h12" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" marker-end="url(#mcbd5e1)"/>
+  <path d="M725.0 150 h12" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" marker-end="url(#mcbd5e1)"/>
+  <path d="M841.0 150 h12" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" marker-end="url(#mcbd5e1)"/>
+  <path d="M449 116 C 483 46, 635 46, 669 114" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 5" marker-end="url(#m94a3b8)"/>
+  <rect x="537.0" y="52.0" width="44.0" height="24.0" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="559.0" y="68.5" font-size="13" font-weight="700" fill="#64748b" text-anchor="middle">no</text>
+  <rect x="479.0" y="163.0" width="44.0" height="22.0" rx="11" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="501.0" y="178.5" font-size="12.5" font-weight="700" fill="#64748b" text-anchor="middle">yes</text>
+  <circle cx="95.0" cy="150.0" r="30" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-lock" x="81.0" y="136.0" width="28" height="28" style="color:#0d9488" stroke-width="1.8"/>
+  <circle cx="71.0" cy="126.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="71.0" cy="126.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="71.0" y="130.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">1</text>
+  <text x="95.0" y="205.0" font-size="13.5" font-weight="700" fill="#0f172a" text-anchor="middle">Post</text>
+  <circle cx="95.0" cy="230.0" r="6.5" fill="#0d9488" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="211.0" cy="150.0" r="30" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-check" x="197.0" y="136.0" width="28" height="28" style="color:#2563eb" stroke-width="1.8"/>
+  <circle cx="187.0" cy="126.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="187.0" cy="126.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="187.0" y="130.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">2</text>
+  <text x="211.0" y="205.0" font-size="13.5" font-weight="700" fill="#0f172a" text-anchor="middle">Accept</text>
+  <circle cx="211.0" cy="230.0" r="6.5" fill="#2563eb" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="327.0" cy="150.0" r="30" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-hash" x="313.0" y="136.0" width="28" height="28" style="color:#2563eb" stroke-width="1.8"/>
+  <circle cx="303.0" cy="126.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="303.0" cy="126.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="303.0" y="130.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">3</text>
+  <text x="327.0" y="205.0" font-size="13.5" font-weight="700" fill="#0f172a" text-anchor="middle">Commit</text>
+  <circle cx="327.0" cy="230.0" r="6.5" fill="#2563eb" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="443.0" cy="150.0" r="30" fill="#e6f6f4" stroke="#9fd8d1" stroke-width="2"/>
+  <use href="#i-eye" x="429.0" y="136.0" width="28" height="28" style="color:#0d9488" stroke-width="1.8"/>
+  <circle cx="419.0" cy="126.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="419.0" cy="126.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="419.0" y="130.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">4</text>
+  <text x="443.0" y="205.0" font-size="13.5" font-weight="700" fill="#0f172a" text-anchor="middle">Reveal</text>
+  <circle cx="443.0" cy="230.0" r="6.5" fill="#0d9488" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="559.0" cy="150.0" r="30" fill="#fdf3e4" stroke="#f2cd92" stroke-width="2"/>
+  <use href="#i-search" x="545.0" y="136.0" width="28" height="28" style="color:#d97706" stroke-width="1.8"/>
+  <circle cx="535.0" cy="126.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="535.0" cy="126.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="535.0" y="130.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">5</text>
+  <text x="559.0" y="205.0" font-size="13.5" font-weight="700" fill="#0f172a" text-anchor="middle">Check</text>
+  <circle cx="542.0" cy="230.0" r="6.5" fill="#0d9488" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="559.0" cy="230.0" r="6.5" fill="#d97706" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="576.0" cy="230.0" r="6.5" fill="#d97706" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="675.0" cy="150.0" r="30" fill="#e9f0fd" stroke="#adc6f8" stroke-width="2"/>
+  <use href="#i-upload" x="661.0" y="136.0" width="28" height="28" style="color:#2563eb" stroke-width="1.8"/>
+  <circle cx="651.0" cy="126.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="651.0" cy="126.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="651.0" y="130.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">6</text>
+  <text x="675.0" y="205.0" font-size="13.5" font-weight="700" fill="#0f172a" text-anchor="middle">Publish</text>
+  <circle cx="675.0" cy="230.0" r="6.5" fill="#2563eb" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="791.0" cy="150.0" r="30" fill="#fce9f2" stroke="#f3b3d1" stroke-width="2" stroke-dasharray="5 4"/>
+  <use href="#i-scale" x="777.0" y="136.0" width="28" height="28" style="color:#db2777" stroke-width="1.8"/>
+  <circle cx="767.0" cy="126.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="767.0" cy="126.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="767.0" y="130.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">7</text>
+  <text x="791.0" y="205.0" font-size="13.5" font-weight="700" fill="#0f172a" text-anchor="middle">Tie-break</text>
+  <circle cx="782.5" cy="230.0" r="6.5" fill="#0d9488" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="799.5" cy="230.0" r="6.5" fill="#db2777" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="907.0" cy="150.0" r="30" fill="#f1ecfe" stroke="#cdbcfb" stroke-width="2"/>
+  <use href="#i-coin" x="893.0" y="136.0" width="28" height="28" style="color:#7c3aed" stroke-width="1.8"/>
+  <circle cx="883.0" cy="126.0" r="11" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+  <circle cx="883.0" cy="126.0" r="9" fill="#0f172a" stroke="none" stroke-width="1.5"/>
+  <text x="883.0" y="130.3" font-size="12.5" font-weight="750" fill="#ffffff" text-anchor="middle">8</text>
+  <text x="907.0" y="205.0" font-size="13.5" font-weight="700" fill="#0f172a" text-anchor="middle">Settle</text>
+  <circle cx="873.0" cy="230.0" r="6.5" fill="#0d9488" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="890.0" cy="230.0" r="6.5" fill="#2563eb" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="907.0" cy="230.0" r="6.5" fill="#d97706" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="924.0" cy="230.0" r="6.5" fill="#d97706" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="941.0" cy="230.0" r="6.5" fill="#db2777" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="230.0" cy="290.0" r="6.5" fill="#0d9488" stroke="none" stroke-width="1.5"/>
+  <text x="243.0" y="295.0" font-size="13" font-weight="600" fill="#334155" text-anchor="start">Client</text>
+  <circle cx="322.6" cy="290.0" r="6.5" fill="#2563eb" stroke="none" stroke-width="1.5"/>
+  <text x="335.6" y="295.0" font-size="13" font-weight="600" fill="#334155" text-anchor="start">Main provider</text>
+  <circle cx="468.4" cy="290.0" r="6.5" fill="#d97706" stroke="none" stroke-width="1.5"/>
+  <text x="481.4" y="295.0" font-size="13" font-weight="600" fill="#334155" text-anchor="start">Verifiers</text>
+  <circle cx="583.8" cy="290.0" r="6.5" fill="#db2777" stroke="none" stroke-width="1.5"/>
+  <text x="596.8" y="295.0" font-size="13" font-weight="600" fill="#334155" text-anchor="start">Tie-breaker</text>
+  <circle cx="714.4" cy="290.0" r="6.5" fill="#7c3aed" stroke="none" stroke-width="1.5"/>
+  <text x="727.4" y="295.0" font-size="13" font-weight="600" fill="#334155" text-anchor="start">Contract</text>
+</svg>

@@ -1,6 +1,13 @@
 # DeGPU
 
-DeGPU is a small decentralized compute marketplace, built as a university blockchain course project. Small teams rent idle GPUs (here, CPUs) from staked providers. Payment, stakes and verification live on-chain; the compute runs off-chain.
+DeGPU is a small decentralized compute marketplace, built as a university blockchain course project. Small teams rent idle computers from providers who lock a stake. Payment, stakes and verification live on-chain; the compute runs off-chain.
+
+![DeGPU at a glance: a client, the smart contracts, the providers and an encrypted file store](docs/img/overview.svg)
+
+*The client (left) and the providers (right: main, verifiers, tie-breaker) meet only through the smart contracts, which handle money and decisions (1, 2), and the encrypted storage, which carries the data (3, 4).*
+
+- **New here?** [docs/INTRODUCTION.md](docs/INTRODUCTION.md) is a short tour with pictures.
+- **Want to run it with classmates?** Follow the [usage guide](#usage-guide-run-a-degpu-network).
 
 Each **job type** says what a provider computes. Each **verification mode** is a different market contract that says how the platform knows the answer is right:
 
@@ -9,6 +16,211 @@ Each **job type** says what a provider computes. Each **verification mode** is a
 | **replicated**, exact | Random providers re-run the work and the contract compares result hashes; a tie-breaker settles mismatches | `image-classify-v1`: top-1 ImageNet label with a client-supplied ONNX model (MobileNetV2 in the demo) |
 | **replicated**, similar | Random providers re-run the work. The client compares the result files with the task's pinned metric and disputes the ones that differ; a tie-breaker re-runs those and judges | `blender-render-v1`: render frames of a `.blend` scene with Blender Cycles (needs Blender 5.2) |
 | **checked** | A checker contract verifies every answer on-chain | `key-search-v1`: find the key hidden in a range, given its hash |
+
+**Contents:** [Usage guide](#usage-guide-run-a-degpu-network) · [How verification works](#how-verification-works) · [Architecture](#architecture) · [Job flows](#job-flows) · [Outcomes](#outcomes) · [For developers](#for-developers) · [Repository layout](#repository-layout) · [Known limitations](#known-limitations)
+
+---
+
+## Usage guide: run a DeGPU network
+
+DeGPU runs on several laptops on the same Wi-Fi:
+- **One laptop is the host.** It runs the shared chain, the encrypted file store and a faucet that hands out test ETH.
+- **Everyone joins with their own wallet and their own app.** The app runs on your laptop, signs your transactions and does the automatic steps of your jobs. You use it from a browser (the GUI) or from the command line; both do the same things.
+- **Each user can buy compute (client), sell it (provider), or both.**
+
+All money is test ETH from the faucet, which has no value. We don't use real ETH: the contracts aren't audited, and every step would cost real fees.
+
+### What each laptop needs
+
+| Laptop | Software |
+|---|---|
+| Every laptop | This repository and [`uv`](https://docs.astral.sh/uv/) |
+| The host | Also [Foundry](https://getfoundry.sh/), for the local chain (`anvil`) |
+| Providers who want render jobs | Also Blender 5.2 |
+| Clients who post image jobs with the demo photos | Also the demo assets (one command in step 1) |
+
+### Step 1: install (every laptop)
+
+```bash
+git clone https://github.com/mohan-zeyu/DeGPU.git && cd DeGPU
+brew install uv                         # or: curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync                                 # Python 3.12 and every library DeGPU uses
+```
+
+Extras, only where needed:
+
+```bash
+brew install foundry                    # the host: anvil, forge, cast (or: curl -L https://foundry.paradigm.xyz | bash && foundryup)
+brew install --cask blender             # providers who want render jobs
+uv run scripts/fetch_demo_assets.py     # clients: the MobileNetV2 model (~14 MB) and 200 demo photos, for image jobs
+```
+
+### Step 2: start the network (the host)
+
+On the host laptop:
+
+```bash
+uv run degpu host --fresh
+```
+
+It prints:
+
+```
+DeGPU network is running.
+  join URL   http://192.168.1.20:8600   (give this to the other users)
+  chain id   31337, registry 0x…
+  faucet     2 ETH per new wallet
+  data       /Users/you/.degpu/host
+Ctrl-C to stop.
+```
+
+- **Share the join URL** with everyone, for example in the class chat.
+- **Keep this terminal open.** Ctrl-C stops the network.
+- **`--fresh` starts a new chain:** new contracts, no jobs, no balances. Without it, the host continues the chain it saved last time.
+- **macOS asks** whether Python may accept incoming connections. Click Allow, or nobody can join.
+- **The host's owner can take part too.** Open a second terminal and follow step 3 like everyone else.
+
+### Step 3: join (everyone)
+
+Start your app with the join URL:
+
+```bash
+uv run degpu app --network http://192.168.1.20:8600 --locked
+```
+
+Then open **<http://127.0.0.1:8700>** in your browser:
+1. On the start screen, choose **New wallet** and give it a name and a password. (**Import wallet** takes an existing private key. Use a test key, never one that holds real money.)
+2. On the home screen, click **Get test ETH**. The faucet gives each wallet 2 test ETH, once.
+
+The same with commands:
+
+```bash
+uv run degpu wallet new alice           # asks for a password
+uv run degpu app --network http://192.168.1.20:8600 --wallet alice    # asks the password, then keeps running
+```
+
+Then, in a second terminal:
+
+```bash
+uv run degpu faucet                     # 2 test ETH, once per wallet
+uv run degpu status                     # network, wallet, balance
+```
+
+- **Keep the app running** while you take part. It does the automatic steps of your jobs: accepting, computing, committing, revealing and sharing keys.
+- **The app remembers** the network and the wallet, so next time `uv run degpu app` is enough.
+- **Your wallet** is an encrypted file in `~/.degpu/`. Without its password nobody can use it, including you.
+
+### Step 4: sell compute (providers)
+
+In the GUI, open **Provide compute**: choose a stake and your prices, click **Register**, then switch **serving** on.
+
+With commands:
+
+```bash
+uv run degpu provider register --stake 1   # offers every job type this laptop can run, at its default price
+uv run degpu provider serve on             # your app now accepts and runs jobs by itself
+uv run degpu provider show                 # stake, prices and record
+```
+
+- **Stake:** at least 0.8 ETH; 1 ETH by default.
+- **Prices:** the defaults are 0.0001 ETH per image or key and 0.001 ETH per frame. Set your own with `--price key-search-v1=0.0002` when registering (once per job type), or later with `uv run degpu provider price key-search-v1 0.0002`.
+- **Render jobs** are offered only when Blender is installed.
+- **While serving,** you can be picked as the main provider of a job, or drawn at random as a verifier or tie-breaker. Every role is paid. A wrong result costs 30% of your stake, and a missed deadline 10% (5% as a verifier or tie-breaker).
+
+### Step 5: buy compute (clients)
+
+In the GUI:
+- **Market** shows the providers, their prices and their records.
+- **Post a job** asks for the job type, its inputs and a main provider. For image and render jobs it also asks whether to verify.
+- The job's page shows each step as it happens, and the results at the end.
+
+With commands:
+
+```bash
+uv run degpu market providers           # who sells what, at what price
+uv run degpu client post key-search-v1 --main 0x99Fa --keys 10 --wait
+uv run degpu client post image-classify-v1 --main 0x99Fa --limit 20 --verify --wait
+uv run degpu client post blender-render-v1 --main 0x99Fa --frames 1-12 --verify --wait --out frames/
+uv run degpu client jobs                # your jobs, as client or provider
+uv run degpu client status replicated:1 # one job's state and timeline
+uv run degpu client results replicated:1
+uv run degpu log -f                     # what your app does, automatic steps included
+```
+
+- **`--main`** is the provider you pick. The first characters of its address are enough.
+- **Inputs:** each job type has its own. `uv run degpu client post TASK --help` lists them:
+
+  | Job type | Inputs | Defaults |
+  |---|---|---|
+  | `key-search-v1` | `--keys N`, `--bits B`, `--impossible N` | 10 keys, each hidden among 2^16 values |
+  | `image-classify-v1` | `--model FILE.onnx`, `--images DIR`, `--limit N` | the demo model and photos in `assets/`, the first 200 |
+  | `blender-render-v1` | `--scene FILE.blend`, `--frames 1-12` | `assets/demo_scene.blend`, which `scripts/make_demo_scene.py` builds with Blender |
+
+- **`--verify`** (image and render jobs) secretly asks for full checking. The deposit is 2 × the price either way; if the job isn't verified, half of it comes back.
+- **A verified job needs 3 providers online besides you:** the main and 2 verifiers, plus a 4th for a tie-break. With fewer, the job runs unverified.
+- **Keep your app running until the job closes.** It reveals your secret decision, shares keys with the verifiers and reviews rendered frames.
+- **If a provider disappears,** wait for the step's deadline (5–10 minutes), then run `uv run degpu client expire replicated:1` (or click **Move on** in the GUI). The provider is slashed and you get your money back.
+
+### Step 6: stop, leave or start over
+
+- **Stop selling:** run `uv run degpu provider serve off`, then set your prices to 0 (`uv run degpu provider price key-search-v1 0`, and the same for every job type you offer). Until your prices are 0 you can still be drawn as a verifier, and a provider who doesn't answer is slashed. The GUI's serve switch offers to do both.
+- **Take your stake back** when you are in no open job: `uv run degpu provider withdraw 1`.
+- **Close the app** with Ctrl-C once your jobs are closed.
+- **The host** stops the network with Ctrl-C:
+  - `uv run degpu host` continues the same chain later;
+  - `uv run degpu host --fresh` starts a new one. Everyone then restarts their app, gets test ETH again and registers again. Wallets stay the same.
+
+### Example: a class demo on 5 laptops
+
+| Laptop | Role | What to run |
+|---|---|---|
+| 1 | Host and client | `degpu host --fresh`, then join as a client |
+| 2–5 | Providers | join, `provider register`, `provider serve on` |
+
+Then post four jobs from laptop 1:
+1. **Key search:** `client post key-search-v1 --main <laptop 2> --keys 10 --impossible 1 --wait`. The provider is paid for the 10 keys it found, and the impossible puzzle is refunded.
+2. **Verified image job:** `client post image-classify-v1 --main <laptop 2> --limit 20 --verify --wait`. Two random providers each re-run half of the photos, and everyone is paid.
+3. **Catch a cheater:**
+   - On laptop 3, run `provider serve on --behavior cheat`: it fakes some of its labels.
+   - Post a verified image job with laptop 3 as the main provider.
+   - The verifiers catch the fakes, a tie-breaker confirms, and laptop 3 loses 0.3 ETH of stake. The **Market** page shows it in laptop 3's record.
+4. **A provider goes offline:**
+   - On laptop 4, run `provider serve on --behavior offline`.
+   - Post a job to laptop 4, wait for the deadline, then run `client expire`. Laptop 4 loses 10% of its stake.
+
+`--behavior` (`cheat`, `liar` or `offline`) exists only for presentations. In the GUI it hides behind the **Presentation mode** switch. Afterwards, switch the laptops back with `provider serve on --behavior honest`.
+
+### Rehearse alone on one laptop
+
+Everything also runs on one laptop, with one app per user. Give each app its own folder (`DEGPU_HOME`) and its own port:
+
+```bash
+uv run degpu host --bind 127.0.0.1 --fresh                                                       # terminal 1
+DEGPU_HOME=~/.degpu-bob   uv run degpu app --network http://127.0.0.1:8600 --locked --port 8701  # terminal 2: a provider
+DEGPU_HOME=~/.degpu-alice uv run degpu app --network http://127.0.0.1:8600 --locked --port 8702  # terminal 3: a client
+```
+
+- **GUI:** open <http://127.0.0.1:8701> and <http://127.0.0.1:8702> in two browser tabs.
+- **CLI:** point it at one app with `--app`, before the command: `uv run degpu --app http://127.0.0.1:8702 client jobs`.
+- A verified job needs two more provider apps (ports 8703 and 8704, say).
+
+### Troubleshooting
+
+| Problem | What to do |
+|---|---|
+| `the DeGPU app is not running` | Start `uv run degpu app` and keep it open. If it runs on another port, add `--app http://127.0.0.1:PORT` before the command. |
+| Nobody can reach the host | Check that everyone is on the same Wi-Fi, that the host allowed Python in the macOS firewall, and that the URL is the printed join URL. Some campus networks block traffic between laptops: use a phone hotspot instead. |
+| `already got its test ETH` | The faucet pays each wallet once. |
+| A job ran unverified | Fewer than 3 other providers were online and offering that job type. |
+| Render jobs aren't offered | Install Blender 5.2 and restart the app. If you registered before that, set a price: `uv run degpu provider price blender-render-v1 0.001`. |
+| A job is stuck | After its deadline, `uv run degpu client expire MODE:ID` settles it. Whoever didn't act in time is slashed. |
+| Providers refuse your jobs | Everyone must run the same version of this repository. The GUI warns when your job type's code differs from the network's. |
+
+Every command has help: `uv run degpu --help` and `uv run degpu COMMAND --help`. The CLI and the GUI only call the app's HTTP API, described in [docs/API.md](docs/API.md); [docs/FRONTEND.md](docs/FRONTEND.md) describes the GUI.
+
+---
+
+## How verification works
 
 **Replicated jobs** keep the client's decision about verification secret:
 - **Same deposit either way.** Every job locks 2 × price. The chain shows only a hash of the decision, so the main provider can't tell which jobs will be checked and has to run every job honestly.
@@ -30,13 +242,11 @@ Each **job type** says what a provider computes. Each **verification mode** is a
 - A provider that misses its deadline is slashed.
 
 Further reading:
+- A short introduction with pictures: [`docs/INTRODUCTION.md`](docs/INTRODUCTION.md).
 - How the code fits together: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - **Adding a job type:** [`docs/ADDING_A_JOB_TYPE.md`](docs/ADDING_A_JOB_TYPE.md). It is one folder under `degpu/tasks/`, plus a small checker contract for checked jobs.
 - Interface spec (names, encodings, rules): [`docs/INTERFACE.md`](docs/INTERFACE.md).
 - **The app's HTTP API** (for the CLI and the GUI): [`docs/API.md`](docs/API.md). Building the GUI on it (screens, calls, types): [`docs/FRONTEND.md`](docs/FRONTEND.md).
-- Run everything: `uv run scripts/demo.py`. Use it with classmates on several laptops: [Using it on a network](#using-it-on-a-network).
-
----
 
 ## Architecture
 
@@ -176,7 +386,11 @@ Reputation counters live in the registry, per market:
 
 The exact rules are in `docs/INTERFACE.md`, sections 7 and 8.
 
-## Setup
+## For developers
+
+The usage guide above is the product path. This section is for working on the code: the tests, the one-process demo and the older per-process commands.
+
+### Setup
 
 ```bash
 brew install foundry                    # forge, anvil, cast (or: curl -L https://foundry.paradigm.xyz | bash && foundryup)
@@ -186,7 +400,7 @@ brew install --cask blender             # optional: Blender 5.2 for the render j
 uv run scripts/calibrate_render.py      # with Blender: measure honest vs cheating renders, check the threshold
 ```
 
-## Running
+### Tests and the demo
 
 ```bash
 cd contracts && forge test              # Solidity tests: both markets, settlement, reverts, draws, task types, gas, deploy
@@ -246,58 +460,6 @@ How the processes find each other:
 - The client keeps its job secrets in `.degpu-state/client-<address>.json`, including each image job's secret decision and salt.
 - All processes must share the same store directory (`DEGPU_STORE`).
 
-## Using it on a network
-
-This is the product path: several laptops on one Wi-Fi, each user with their own wallet, no time travel. One laptop is the **host**. It runs the shared chain, the shared (encrypted) file store and a **faucet**, which gives every new wallet 2 test ETH once. Test ETH has no value. We don't use real ETH: the contracts aren't audited, and every step would cost real fees.
-
-On the host laptop (needs Foundry):
-
-```bash
-uv run degpu host                       # prints the join URL, e.g. http://192.168.1.20:8600
-```
-
-On every user's laptop, the host's too (needs only `uv` and this repo, plus Blender to offer renders):
-
-```bash
-uv run degpu wallet new alice           # or: uv run degpu wallet import alice  (asks for your private key, hidden)
-uv run degpu app --network http://192.168.1.20:8600 --wallet alice    # asks the password; keep it running
-```
-
-Then open **<http://127.0.0.1:8700>** in a browser: the GUI does everything below with buttons. You can also start the app without a wallet (`uv run degpu app --locked`), then create, import or unlock one in the GUI.
-
-The same actions as commands:
-
-In another terminal:
-
-```bash
-uv run degpu faucet                     # 2 test ETH, once per wallet
-uv run degpu status
-
-# sell compute
-uv run degpu provider register --stake 1   # offers every task that runs on this laptop, at its default price
-uv run degpu provider serve on             # from now on the app accepts and runs jobs by itself
-uv run degpu provider show
-
-# buy compute
-uv run degpu market providers
-uv run degpu client post key-search-v1 --main 0x99Fa --keys 10 --wait     # the first characters of the address are enough
-uv run degpu client post image-classify-v1 --main 0x99Fa --limit 20 --verify --wait
-uv run degpu client jobs
-uv run degpu client status replicated:1
-uv run degpu client results replicated:1
-uv run degpu log -f                        # what the app does, automatic steps included
-```
-
-- **Manual actions are commands; automatic steps run in the app.** A client's app reveals the hidden decision, shares keys with verifiers and reviews frames. A provider's app accepts, computes and submits. Keep the app open while your jobs run.
-- **The CLI only calls the app's API** ([`docs/API.md`](docs/API.md)), and the GUI will do the same. `--json` and `--app` go before the command: `uv run degpu --json client jobs`.
-- **A verified job needs 3 online providers** offering the task besides the client (the main and 2 verifiers), and a 4th for a tie-break. With fewer, the job runs unverified.
-- **To stop selling,** run `provider serve off` and set your prices to 0 (`provider price key-search-v1 0`). Otherwise you can still be drawn as a verifier and get slashed for not answering.
-- **Deadlines are real time:** 5–10 minutes per phase. If a provider disappears, run `client expire <job>` after the deadline.
-- **Where things are kept:** wallets and job secrets in `~/.degpu/` (`DEGPU_HOME`), the host's chain and files in `~/.degpu/host/`. `degpu host --fresh` starts a new chain.
-- **Firewall:** macOS may ask whether Python may accept incoming connections on the host. Allow it.
-
-The older commands (`python -m degpu.chain / agent / client`) still run the local demo setup on a throwaway chain.
-
 ## Repository layout
 
 ```
@@ -314,9 +476,11 @@ scripts/                fetch_demo_assets.py, demo.py, make_demo_scene.py (runs 
 tests/                  test_crypto, test_storage, test_runner, test_decode, test_key_search, test_similarity,
                         test_tasks (conformance, every task), test_e2e; fake_render/ (a test-only similar task);
                         test_wallet, test_host, test_app (host + five users through the API)
-docs/                   ARCHITECTURE.md, ADDING_A_JOB_TYPE.md, INTERFACE.md (v4), API.md (the app's HTTP API),
+docs/                   INTRODUCTION.md (a short tour; its pictures are in docs/img/), ARCHITECTURE.md,
+                        ADDING_A_JOB_TYPE.md, INTERFACE.md (v4), API.md (the app's HTTP API),
                         FRONTEND.md (how the GUI uses it)
 frontend/               the GUI (React + Vite + TypeScript); `npm run build` writes degpu/web/, which the app serves
+degpu/web/              the built GUI (committed, so users need no Node)
 ```
 
 ## Known limitations
