@@ -10,3 +10,11 @@ contracts/broadcast/
 /assets/
 results/
 frontend/node_modules/
+
+# Windows runtime, wallets, chain state and download caches
+/.local/
+/.tools/
+/.downloads/
+/DeGPU-Launcher.exe
+/launcher-diagnostic.log
+/frontend/dist/
